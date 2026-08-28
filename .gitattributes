@@ -1,0 +1,14 @@
+# Modelos y texturas grandes por Git LFS
+*.glb                 filter=lfs diff=lfs merge=lfs -text
+*.gltf                filter=lfs diff=lfs merge=lfs -text
+*.fbx                 filter=lfs diff=lfs merge=lfs -text
+assets/models/*.jpg   filter=lfs diff=lfs merge=lfs -text
+assets/models/*.png   filter=lfs diff=lfs merge=lfs -text
+
+# Texto con finales de linea normalizados
+*.gd        text eol=lf
+*.gdshader  text eol=lf
+*.tscn      text eol=lf
+*.tres      text eol=lf
+*.md        text eol=lf
+*.py        text eol=lf

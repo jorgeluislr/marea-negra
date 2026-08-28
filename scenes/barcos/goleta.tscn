@@ -1,0 +1,27 @@
+[gd_scene format=3 uid="uid://bktul65h1jnmi"]
+
+[ext_resource type="PackedScene" path="res://scenes/barcos/barco_base.tscn" id="1"]
+[ext_resource type="PackedScene" uid="uid://cuy7g2ll7ol1t" path="res://assets/models/goleta.glb" id="2"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_gol"]
+size = Vector3(5.252, 11.829, 16.981)
+
+[node name="Goleta" unique_id=1979023730 instance=ExtResource("1")]
+velocidad_giro = 0.4
+empuje_delantera = 0.3
+empuje_trasera = 0.7
+nombre = "Goleta"
+altura_flotacion = 4.97
+recorte_radio = Vector2(2.454, 5)
+
+[node name="CollisionShape3D" parent="." index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.0393, 0.6589, 1.7695)
+shape = SubResource("BoxShape3D_gol")
+
+[node name="Modelo" parent="." index="1"]
+transform = Transform3D(0, 0, -10.8, 0, 10.8, 0, 10.8, 0, 0, 0, 0, 0)
+
+[node name="Malla" parent="Modelo" index="0" unique_id=175292182 instance=ExtResource("2")]
+
+[node name="CamaraNav" parent="." index="3"]
+transform = Transform3D(1, 0, 0, 0, 0.9623982, 0.2716425, 0, -0.2716425, 0.96239823, 0, 5.994, 30.996)
