@@ -1,0 +1,11 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/prueba_barrido.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/world/main_world.tscn" id="2"]
+
+[node name="Prueba" type="Node"]
+script = ExtResource("1")
+malla = "foque"
+cuantos = 253
+
+[node name="Mundo" parent="." instance=ExtResource("2")]

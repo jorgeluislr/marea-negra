@@ -1,0 +1,10 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/prueba_vela_lancha.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/world/main_world.tscn" id="2"]
+
+[node name="Prueba" type="Node"]
+script = ExtResource("1")
+carpeta = "C:/Users/ASUSTU~1/AppData/Local/Temp/claude/E--Godot-Game3D-marea-negra/85097d2e-c4bd-4a4e-af2f-9a5dc100ca12/scratchpad"
+
+[node name="Mundo" parent="." instance=ExtResource("2")]

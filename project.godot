@@ -16,9 +16,13 @@ config/features=PackedStringArray("4.7", "Forward Plus")
 
 [autoload]
 
-Viento="*res://scripts/viento.gd"
-Ajustes="*res://scripts/ajustes.gd"
+Viento="*res://scripts/mundo/viento.gd"
+Ajustes="*res://scripts/mundo/ajustes.gd"
 
 [display]
 
 window/size/mode=3
+
+[physics]
+
+common/physics_ticks_per_second=120

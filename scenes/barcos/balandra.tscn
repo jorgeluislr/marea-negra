@@ -1,0 +1,166 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/barcos/barco_base.tscn" id="1"]
+[ext_resource type="PackedScene" path="res://assets/models/balandra.glb" id="2"]
+[ext_resource type="Script" path="res://scripts/barco/balandra.gd" id="8"]
+[ext_resource type="Script" path="res://scripts/tela/vela_fisica.gd" id="4"]
+[ext_resource type="Script" path="res://scripts/tela/aparejo.gd" id="9"]
+[ext_resource type="Script" path="res://scripts/tela/bandera_fisica.gd" id="6"]
+[ext_resource type="Script" path="res://scripts/tela/tela_shader.gd" id="10"]
+[ext_resource type="Script" path="res://scripts/tela/depurar_tela.gd" id="5"]
+[ext_resource type="Script" path="res://scripts/barco/audio_barco.gd" id="7"]
+
+[sub_resource type="Resource" id="Aparejo_foque"]
+script = ExtResource("9")
+; CADA barco necesita SU copia: el aparejo guarda estado (el angulo de trimado y el
+; izado), y un sub-recurso de escena se COMPARTE entre instancias. Sin esto, al cambiar
+; de barco con TAB y volver, la percha saltaba de golpe al angulo del barco anterior
+; mientras el pano nacia sin trimar: la mayor se estiraba un 36 % de media.
+resource_local_to_scene = true
+driza_hueso = "driza_foque"
+driza_recorrido = 7.722
+izado_suavizado = 1.5
+
+[sub_resource type="Resource" id="Aparejo_mayor"]
+script = ExtResource("9")
+; CADA barco necesita SU copia: el aparejo guarda estado (el angulo de trimado y el
+; izado), y un sub-recurso de escena se COMPARTE entre instancias. Sin esto, al cambiar
+; de barco con TAB y volver, la percha saltaba de golpe al angulo del barco anterior
+; mientras el pano nacia sin trimar: la mayor se estiraba un 36 % de media.
+resource_local_to_scene = true
+; Dos cabos: la driza sube el pano y la del PICO lo tumba a la vez, girando sobre la garganta.
+driza_hueso = "driza"
+driza_recorrido = 6.929
+pico_hueso = "driza_pico"
+pico_recorrido = 5.494
+pico_giro = 19.7
+pico_eje = Vector3(0, 0, 1)
+izado_suavizado = 1.5
+; Trimado LENTO a proposito: a 1.8 el pano se estiraba un 9,95 % de media; a 0.4, un 1,87 %.
+trimado_hueso = "vela"
+trimado_angulo_max = 45.0
+trimado_eje = Vector3(0, 1, 0)
+trimado_invertir = true
+trimado_suavizado = 0.4
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_bal"]
+size = Vector3(3.81, 2.86, 12)
+
+[node name="Balandra" instance=ExtResource("1")]
+script = ExtResource("8")
+velocidad_max = 9.0
+aceleracion = 2.0
+velocidad_giro = 0.45
+empuje_delantera = 0.35
+empuje_trasera = 0.65
+angulo_muerto = 40.0
+angulo_optimo = 95.0
+nombre = "Balandra"
+altura_flotacion = -1.35
+recorte_radio = Vector2(1.9, 6)
+
+[node name="CollisionShape3D" parent="." index="0"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.428, 0)
+shape = SubResource("BoxShape3D_bal")
+
+[node name="Modelo" parent="." index="1"]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, 0, 0, 0)
+; La balandra NO lleva vela de shader: sus tres telas (foque, mayor y bandera) son fisicas y
+; TelaFisica oculta la malla de autor para poner el SoftBody en su sitio. Los ajustes de
+; shader que llegaron a estar aqui, MEDIDOS sobre este modelo, por si algun dia una tela suya
+; vuelve al shader (mastil y perchas van en el espacio LOCAL de la malla):
+;   amplitud 0.4  hinchado 0.9  frecuencia 3.0  velocidad 2.0  flameo 0.3  flameo_base 0.04
+;   mastil_base (0.1384, 9.5494, 0)  mastil_eje (-0.1645, -0.9864, 0)  mastil_radio 0.107
+;   perchas_a (-0.9144, 2.5, 0) y (0.0612, 8.35, 0)
+;   perchas_b (6.0497, 3.1464, 0) y (3.872, 10.1272, 0)   perchas_radio 0.062
+
+[node name="Malla" parent="Modelo" index="0" instance=ExtResource("2")]
+
+[node name="HelmPosition" parent="." index="2"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 4.8)
+
+[node name="CamaraNav" parent="." index="3"]
+transform = Transform3D(1, 0, 0, 0, 0.9623982, 0.2716425, 0, -0.2716425, 0.96239823, 0, 5, 24)
+
+[node name="VelaFisicaFoque" type="Node3D" parent="."]
+script = ExtResource("4")
+nombre_malla = "foque"
+mando = 0
+aparejo = SubResource("Aparejo_foque")
+; FLAMEO al desventar. En fachada la lona pegaba un chasquido entero cada ~6,4 s —medio ciclo
+; del bamboleo de direccion del viento, justo donde la percha gira mas rapido— en vez de flamear:
+; pico 4,0 veces la mediana. No era el trimado ni las capsulas ni el bamboleo del casco; es que
+; un campo de viento UNIFORME no tiene la realimentacion que hace flamear una tela. Con 0,3 el
+; pico baja a 1,8 y los intervalos dejan de ser regulares, con el estiramiento intacto (0,004,
+; cero aristas pasadas). Barrido en tools/golpe_vela.tscn: 0,5 y 0,8 son mas violentos.
+; Portando no hace nada: es proporcional a 1 - factor_viento().
+flameo_por_desventa = 0.3
+
+[node name="VelaFisicaMayor" type="Node3D" parent="."]
+script = ExtResource("4")
+nombre_malla = "vela_mayor"
+mando = 1
+aparejo = SubResource("Aparejo_mayor")
+; Misma fisica que el foque (que va perfecto): los defaults del script. Solo sube la masa,
+; proporcional a que el pano tiene 6 veces mas vertices.
+masa = 48.0
+; El estiramiento de esta vela NO era el solver: era el TRIMADO. El SoftBody vive en espacio de
+; mundo y no sigue a su padre, asi que los vertices anclados se teletransportan con el hueso
+; `vela` y la lona libre va por detras. El puno de escota, a 5,7 m del mastil, barre 4,7 m al
+; trimar 45 grados, y las aristas fijo/libre del extremo de la botavara se abrian de 14 cm a
+; 1,13 m. Rigidez, precision, masa y viento NO lo tocaban (los cuatro comprobados). Lo arregla
+; trimar mas despacio: ControlVela.suavizado 1.8 -> 0.4. Medido con depurar_vela.gd:
+;   suavizado 1.8 / prec 20: medio 9,95 %  peor 824 %  hinchado 1,206 m  241 verts > 0,5 m
+;   suavizado 0.4 / prec 10: medio 1,87 %  peor 119 %  hinchado 0,395 m    0 verts > 0,5 m
+; La precision sola no hacia nada (9,95 -> 9,87 % al subirla a 60); con el trimado lento, 10
+; iteraciones ya bastan y 30 apenas mejora (1,62 %) por el triple de coste. La rigidez se queda
+; en el 0,5 del foque: subirla no servia y reintroduce el "palo imaginario" junto a los bordes.
+rigidez = 0.5
+precision = 10
+; Sin colision con las capsulas de palo: el pie/pico/relinga ya estan anclados a los palos,
+; asi que la capsula solo empujaba el pano y creaba un "angulo" a lo largo de la botavara.
+capa_perchas = 0
+; FLAMEO al desventar. En fachada la lona pegaba un chasquido entero cada ~6,4 s —medio ciclo
+; del bamboleo de direccion del viento, justo donde la percha gira mas rapido— en vez de flamear:
+; pico 4,0 veces la mediana. No era el trimado ni las capsulas ni el bamboleo del casco; es que
+; un campo de viento UNIFORME no tiene la realimentacion que hace flamear una tela. Con 0,3 el
+; pico baja a 1,8 y los intervalos dejan de ser regulares, con el estiramiento intacto (0,004,
+; cero aristas pasadas). Barrido en tools/golpe_vela.tscn: 0,5 y 0,8 son mas violentos.
+; Portando no hace nada: es proporcional a 1 - factor_viento().
+flameo_por_desventa = 0.3
+
+[node name="DepurarVela" type="Node3D" parent="."]
+script = ExtResource("5")
+
+[node name="BanderaShader" type="Node3D" parent="."]
+script = ExtResource("10")
+; La bandera es tela de SHADER y no `SoftBody3D`, como la de la lancha. La fisica no puede
+; sostenerla: su gratil va cosido a 54,8 mm del eje del mastil, que ahi tiene 46 mm de radio, o
+; sea NUEVE MILIMETROS de holgura para un pano de 960 mm. Al virar, el hueso lleva el gratil
+; alrededor del palo, la lona va con retraso y termina al otro lado; una vez envuelta no sale.
+; Medido en un viraje a sotavento: de 0 puntos a menos de 100 mm del eje se pasaba a 19, con el
+; mas hondo a 4 mm (dentro de la madera), y 5 s despues seguian 10-11 pegados.
+;
+; Descartado midiendo, todo: velocidad de giro del hueso (1,2 / 6 / 12 igual), la capsula del
+; mastil con y sin ella (10 vs 11 puntos pegados), el flameo, el empuje (10 a 70), el solver
+; (rigidez 0,3-0,95, precision 10-30, masa, arrastre: 104-108 mm planos) y la frecuencia de
+; fisica (60/120/240/480: arregla la costura, no el envuelto). Y una restriccion dura que sacaba
+; cada paso los puntos metidos en el palo -se ejecutaba, sacaba 7-9 por paso- la deshacia el
+; solver, porque el enrollado es TOPOLOGICO: hay tela al otro lado del palo tirando.
+;
+; Con el shader es imposible por construccion: el giro a sotavento es RIGIDO y entero (lo
+; calcula `TelaShader._giro_bandera` y lo aplica el vertex shader), asi que no hay lona que
+; pueda quedarse al otro lado. Y no hace falta subclase: `TelaShader` ya trae la rama de
+; bandera -anclaje y direccion de reposo salen del canal verde de `Col`, que esta malla trae
+; a 1,000 en sus 187 vertices-.
+nombre_malla = "bandera"
+; Sin colision de vela: esos valores son del casco de la LANCHA y la rama de bandera del shader
+; no los usa, pero se apagan para no dejar geometria ajena.
+mastil_radio = 0.0
+cabos_a = PackedVector3Array()
+cabos_b = PackedVector3Array()
+perchas_a = PackedVector3Array()
+perchas_b = PackedVector3Array()
+
+[node name="AudioBarco" type="Node3D" parent="."]
+script = ExtResource("7")

@@ -1,10 +1,27 @@
 [gd_scene format=3 uid="uid://bktul65h1jnmi"]
 
 [ext_resource type="PackedScene" path="res://scenes/barcos/barco_base.tscn" id="1"]
+[ext_resource type="Script" path="res://scripts/tela/vela_shader.gd" id="3"]
+[ext_resource type="Script" path="res://scripts/tela/aparejo.gd" id="4"]
 [ext_resource type="PackedScene" uid="uid://cuy7g2ll7ol1t" path="res://assets/models/goleta.glb" id="2"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_gol"]
 size = Vector3(5.252, 11.829, 16.981)
+
+[sub_resource type="Resource" id="Aparejo_vela"]
+script = ExtResource("4")
+; CADA barco necesita SU copia: el aparejo guarda estado (el angulo de trimado y el
+; izado), y un sub-recurso de escena se COMPARTE entre instancias. Sin esto, al cambiar
+; de barco con TAB y volver, la percha saltaba de golpe al angulo del barco anterior
+; mientras el pano nacia sin trimar: la mayor se estiraba un 36 % de media.
+resource_local_to_scene = true
+; Los valores medidos de la lancha, que es de donde salen los tres cascos de una pieza.
+driza_hueso = "driza"
+driza_recorrido = 0.77
+izado_suavizado = 2.5
+trimado_hueso = "vela"
+trimado_angulo_max = 10.0
+trimado_suavizado = 4.0
 
 [node name="Goleta" unique_id=1979023730 instance=ExtResource("1")]
 velocidad_giro = 0.4
@@ -25,3 +42,10 @@ transform = Transform3D(0, 0, -10.8, 0, 10.8, 0, 10.8, 0, 0, 0, 0, 0)
 
 [node name="CamaraNav" parent="." index="3"]
 transform = Transform3D(1, 0, 0, 0, 0.9623982, 0.2716425, 0, -0.2716425, 0.96239823, 0, 5.994, 30.996)
+
+[node name="Vela" type="Node3D" parent="."]
+script = ExtResource("3")
+; Casco y vela son la MISMA malla en este modelo; que parte ondea lo dice el rojo de Col.
+nombre_malla = "Mesh_0"
+mando = 1
+aparejo = SubResource("Aparejo_vela")

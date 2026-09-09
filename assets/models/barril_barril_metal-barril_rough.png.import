@@ -1,0 +1,44 @@
+[remap]
+
+importer="texture"
+type="CompressedTexture2D"
+uid="uid://dr5lnio5q8vav"
+path.s3tc="res://.godot/imported/barril_barril_metal-barril_rough.png-eb2406eb526e4cb4c8b17c1defff3aa4.s3tc.ctex"
+metadata={
+"imported_formats": ["s3tc_bptc"],
+"vram_texture": true
+}
+generator_parameters={
+"md5": "80a0e225d0f4eea7f695adba15d90ddb"
+}
+
+[deps]
+
+source_file="res://assets/models/barril_barril_metal-barril_rough.png"
+dest_files=["res://.godot/imported/barril_barril_metal-barril_rough.png-eb2406eb526e4cb4c8b17c1defff3aa4.s3tc.ctex"]
+
+[params]
+
+compress/mode=2
+compress/high_quality=false
+compress/lossy_quality=0.7
+compress/uastc_level=0
+compress/rdo_quality_loss=0.0
+compress/hdr_compression=1
+compress/normal_map=0
+compress/channel_pack=0
+mipmaps/generate=true
+mipmaps/limit=-1
+roughness/mode=0
+roughness/src_normal=""
+process/channel_remap/red=0
+process/channel_remap/green=1
+process/channel_remap/blue=2
+process/channel_remap/alpha=3
+process/fix_alpha_border=true
+process/premult_alpha=false
+process/normal_map_invert_y=false
+process/hdr_as_srgb=false
+process/hdr_clamp_exposure=false
+process/size_limit=0
+detect_3d/compress_to=0

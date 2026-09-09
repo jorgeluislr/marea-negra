@@ -26,6 +26,23 @@ assets/models/*_respaldo*
 assets/models/*_viejo*
 blender_src/*.bak
 
+# Cache de Python de los scripts de Blender
+__pycache__/
+*.pyc
+
+# Audio: fuera del repositorio hasta terminarlo. Hoy son 43 MB de WAV sin comprimir (una
+# cama de puerto de 109 s ocupa 18 MB ella sola) y aun le queda trabajo: pasarlo a .ogg lo
+# dejaria en ~5 MB, y los emisores 3D piden mono. Versionarlo ahora significaria arrastrar
+# cada retoque entero en el historial para siempre. Entra al repo cuando este bueno.
+# Los .import SI se versionan, por lo mismo que en los modelos: llevan los uid://.
+# Los sintetizados (viento, mar, flameo, agua) los reproduce audio_src/sintetizar_sfx.py
+# bit a bit; los tres descargados de Freesound estan en fuentes/crudo/audio, con su
+# procedencia en assets/audio/PROCEDENCIA.md, que si se versiona.
+assets/audio/*.wav
+assets/audio/*.ogg
+# `musica.ogg` entro en el primer commit y .gitignore no afecta a lo ya seguido: se saco
+# del indice con `git rm --cached` el 2026-09-09. El fichero sigue en disco.
+
 # Modelos y texturas de los barcos: fuera del repositorio hasta tener las
 # versiones optimizadas para juego (ahora son mallas de autoria de 40-62 MB).
 # Los .import SI se versionan: llevan los uid:// con los que las escenas

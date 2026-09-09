@@ -104,6 +104,9 @@ estaban registrados:
 | `Meshy_AI__0827005500_texture.glb` | 89,7 | 2026-08-27 02:55 | `289e0cc8-9348-4e87-995a-932a2cfb0468` | 4 | otro retexturizado a 8192² del **mismo modelo base** |
 | `Meshy_AI__0828152338_texture.glb` | 103,5 | 2026-08-28 17:23 | `01a048f0-a96d-768c-a816-8f2898b99d2b` | **7** | casco con tablazón modelada, **sin timón**, atlas 8192² — es el que está en juego como `casco_v4` |
 
+| `Meshy_AI__0829140717_texture.glb` | 121,9 | 2026-08-29 17:03 | `56793b13-75d8-4c87-99b1-53ec8355fc38` | 4 | **barril**, malla completa |
+| `Meshy_AI_barril_pirata_tri_3k_0829150333_texture.glb` | 100,6 | 2026-08-29 17:03 | `b28ef7f6-78f9-4ed1-99a3-34026e63fb4d` | 4 | el mismo, remallado a 3k en Meshy — se descartó por pérdida de detalle |
+
 El `.zip` de FBX comparte UUID con su `.glb`: es la misma generación descargada en otro formato.
 Se conserva porque **glTF solo transporta triángulos** y el FBX era el único camino para traer los
 cuadriláteros del remallado de Meshy.
@@ -227,6 +230,7 @@ de dónde salió un fichero, y una cadena de propiedad solo vale si está escrit
 | `weathered_planks` | [Poly Haven](https://polyhaven.com/a/weathered_planks) | Dario Barresi, Dimitrios Savva | 2,0 × 2,0 m | **cubierta** (`cubierta_tablazon`) y **casco** (`casco_tablazon`, capa de detalle triplanar) |
 | `weathered_brown_planks` | [Poly Haven](https://polyhaven.com/a/weathered_brown_planks) | Dimitrios Savva, Rico Cilliers | 1,8 × 1,8 m | descartada: retícula de juntas |
 | `washed_grey_oak_veneer` | [Poly Haven](https://polyhaven.com/a/washed_grey_oak_veneer) | Poly Haven | 1,0 × 1,0 m | descartada dos veces: como color por falta de contraste, y como relieve por lo mismo — se probó en el casco y quitaba el detalle |
+| `hessian_380` | [Poly Haven](https://polyhaven.com/a/hessian_380) | colormass (fotografía), Rico Cilliers (proceso) | 0,2739 × 0,2738 m | **velas** (`lona_vela`): la trama del paño. Se usa **recoloreada** — se le toma la luminancia y se multiplica por nuestro blanco amarillado, así que del original queda el tejido y no el marrón de yute |
 
 **Una baldosa, dos escalas.** El casco usa `rough_wood` para el color a 1,5 m de lado y para el
 relieve a 0,35 m, con proyecciones triplanares independientes. No es un capricho: los nudos de ese

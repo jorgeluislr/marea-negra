@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/foto_mayor.gd" id="1"]
+
+[node name="FotoMayor" type="Node"]
+script = ExtResource("1")
+carpeta = "C:/Users/ASUSTU~1/AppData/Local/Temp/claude/E--Godot-Game3D-marea-negra/02623ca7-a273-4ed6-953f-01dc76affc99/scratchpad/vela"
