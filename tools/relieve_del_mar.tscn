@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/relieve_del_mar.gd" id="1"]
+
+[node name="RelieveDelMar" type="Node"]
+script = ExtResource("1")

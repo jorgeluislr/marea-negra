@@ -31,8 +31,12 @@ surface_material_override/0 = SubResource("StandardMaterial3D_1")
 [node name="CameraPivot" type="Node3D" parent="."]
 position = Vector3(0, 0.7, 0)
 
+; far: de fabrica son 4.000 y el agua llega a 20.000, asi que el mar se acababa en un canto a
+; cuatro kilometros. Desde cubierta el horizonte esta a 5 km, pero se deja igual que las camaras
+; del barco para que no haya dos mares distintos segun desde donde mires.
 [node name="Camera3D" type="Camera3D" parent="CameraPivot"]
 current = false
+far = 25000.0
 
 [node name="InteractRay" type="RayCast3D" parent="CameraPivot/Camera3D"]
 target_position = Vector3(0, 0, -3)

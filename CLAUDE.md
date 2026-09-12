@@ -56,7 +56,19 @@ the editor. There **is** a test suite; see below.
   SERIES — peak over median, which is what tells a heartbeat from flutter, and it logs
   `factor_viento()` beside it so you know whether the sail was drawing or luffing),
   `latido_velas.tscn` (what makes a sail throb, and it must be measured in the SHIP's space or
-  all you see is the hull bobbing) and
+  all you see is the hull bobbing),
+  `retraso_anclas.tscn` (how far each pinned point sits from its own anchor node — the magenta
+  line in the debug view — swept across physics rates AND frame rates separately, because that
+  is what says which clock causes it),
+  `reloj_del_pano.tscn` (how many distinct values the ship, the anchor node and the cloth point
+  each take over eight consecutive physics steps; it is what proved the point moves once per
+  RENDER frame) and
+  `hinchado_mayor.tscn` (how much belly each sail has — how far each FREE point has gone from
+  where its own skin puts it — swept against `empuje_viento`, with the stretch beside it so you
+  never buy belly with stretch without seeing the price),
+  `arista_pasada.tscn` (WHICH edge is over 25 % and how many millimetres that is; a short rest
+  edge hits 240 % with two centimetres and is invisible, so the percentage alone decides
+  nothing) and
   `probar_acabado.tscn` (before/after captures plus local contrast, the only way to tell whether
   a material detail is actually being applied).
 
@@ -305,12 +317,133 @@ point count.
 (rudder, mast, spars) are identified by their BONE, not by colour: skin weights do export, and a
 single colour layer cannot carry both a flat "I am sail" tag and the gradient the shader needs.
 
+**A pinned point must be pushed to the physics server every STEP, because `SoftBody3D` only
+carries it to its anchor node once per RENDER FRAME.** This was found on 10 September 2026 and it
+is the single biggest cloth defect the project has had. With physics at 120 Hz and 30 fps there
+are four steps per frame: in three of them the pinned point stands still in world space while the
+ship keeps sailing, so the whole anchor seam trails astern and snaps back at the next frame. The
+user saw it as the flag's column of anchors stretching the moment the ship got under way and
+recomposing when it stopped — and *stopping was the cure* because the lag is `(steps per frame −
+1) × step × speed`, which is zero at zero knots.
+
+Measured with `tools/retraso_anclas.tscn` at 8,74 m/s, worst separation between a pinned point and
+its own anchor node: **30 fps → 218 mm, 60 fps → 73 mm, uncapped (one step per frame) → 0**. That
+formula reproduces all three to three digits. Two things it is NOT, and both were ruled out by
+measuring: the anchor nodes (they are children of the `Skeleton3D` and their world position tracks
+the ship every single step — `tools/reloj_del_pano.tscn` counts 8 distinct values in 8 steps for
+the ship and 8 for the anchor, against **2** for the cloth point), and a stale read (the physics
+server returns the same number as the node, so the point genuinely is not being moved).
+
+The fix is two lines in `TelaFisica._colocar_anclas()`: keep placing the anchor `Node3D` — that is
+what `SoftBody3D` reads on its own per-frame refresh — and additionally call
+`PhysicsServer3D.soft_body_move_point()` for every pinned point, from `_physics_process`. All
+separations go to **0,0 mm at every frame rate**.
+
+**This also fixed the "seam that opens while sailing", and is why the project went back to
+60 Hz.** The mainsail's seam went from 0,028 m to **0,002**. It had been blamed on the free cloth
+being one physics step behind its anchors and on the step size alone (60 Hz → 108 mm, 120 → 51,
+240 → 13), and the physics rate had been doubled because of it. But sweeping the physics rate
+also sweeps how many steps fit in a frame, which is the real variable: it was the ANCHORS that
+lagged, not the free cloth. With the anchors fixed the reason for 120 Hz was gone.
+
+**Physics runs at 60 Hz since 10 September 2026, and halving it means doubling the solver
+iterations** so the work per SECOND stays put: jib 5 → 10, mainsail 10 → 20, flag 10 → 20. Do
+both together or every cloth ends up sitting on its own limit at once — at 60 Hz with the old
+iteration counts the jib gave 1-2 edges past 25 %, the mainsail's seam read 0,009-0,012 against a
+0,010 cap and the flag's stretch on respawn swung 0,014-0,062 against 0,060, all three flickering
+red run to run. With the iterations doubled: seam 0,007, flag 0,027-0,030, and every figure
+repeatable to three decimals across three runs.
+
+**Even so 60 Hz is nearly half the cost**, because doubling the solver only pays back part of
+what halving the step count saves — everything else in a physics step goes with the step. Measured
+with the fps cap off: **120,8 ms of physics per second of game against 226**, and uncapped fps
+1.878 against 1.400.
+
+**The price, and it was accepted knowingly:** the jib is born with **one** edge past 25 % and it
+does not close. Ruled out by measuring, do not repeat it: the solver (`precision` 5, 10 and 20
+give the identical edge) and the birth frame (with `delta_estable` at 1/60 the cloth is born in a
+0,000-0,006 s frame and the edge is still there). In real size it is small — anchored, the jib's
+worst edge is 19,1 % of 30,9 mm, i.e. **5,9 mm**, against 10,4 % and 3,2 mm at 120 Hz. The test
+tolerates exactly 1 on the jib and 0 on the mainsail, and it is paired with a cap in METRES
+(30 mm) which is what actually guards against a tear: the birth tear opened 63 edges and left them
+open, so it trips the metric cap even where the count is tolerated.
+
+**Part of what looked like wind was the bug: the sail went visibly flat once the anchors were
+fixed.** Those anchors used to jump up to 218 mm per frame, and that jolt was pumping energy into
+the cloth — a false belly. It is the same mechanism `VelaFisica.hueso_marco` documents as NOT
+working: `soft_body_move_point()` sets a point's position but not its PREVIOUS position, so the
+solver reads a fabricated velocity. On a pinned point that does not matter (the pin holds it
+anyway); on the free cloth around it, it did.
+
+So the belly has to be put back with real wind. Measured on the mainsail with
+`tools/hinchado_mayor.tscn` — mean distance of each free point from where its own skin puts it —
+at 60 Hz with `precision` 20: `empuje_viento` 7 → **0,109 m** (flat, and it showed), 40 →
+**0,258**, 56 → 0,285. It ships at **40**. 56 is not out of reach (stretch 0,0097 of a 0,020 cap)
+but it puts the sailing seam back near its own 0,010. Note the historical good band for this sail
+was 0,296-0,395 m of belly, so it is still on the shy side — the knob is one number and its price
+is now measured.
+
+**The jib does NOT get this**: at 7 it is already at 0,225 m, and at 56 it goes to 0,0157 of
+stretch with 3 edges past 25 %. Same physics, different sail — one number per cloth, not a global.
+
+**Two cloths never get born in the same frame, and nothing heavy may be built in `_ready`.**
+Building the water disc (263.169 vertices) in one go costs **140 ms in a single frame**, and a
+`SoftBody3D` born in a frame like that comes out torn. It is now spread over chunks of 5 ms
+(`mar.gd`'s `MS_POR_FRAME` — a time budget, not a row count, because at 320 → 512 cells the
+per-chunk cost grew 60 % with nothing to warn you), a coarse 48 × 48 disc covers the first frames
+so there is water from the start, and the fine one goes in around frame 31, once all three cloths
+are mounted. And `TelaFisica._esperar_reloj()` refuses to mount if another cloth already mounted
+this frame: the three used to mount in frame 5 and **between them they made that frame 74,7 ms**
+against the 33,3 a frame is meant to be — the cloth being born eating the stutter it is itself
+causing. `tools/tirones_del_arranque.tscn` prints where the slow frames of a startup are and
+which frame each cloth is born in; after this, the cloths come out in frames 5, 6 and 7 and none
+of those is slow.
+
+**What breaks a cloth is not only the frame it is BORN in — it is the thirty frames after it,
+while it settles.** This is new (12 September 2026) and it corrects a belief the project had
+written down. Building the fine water disc takes ~140 ms spread over some thirty frames of 5 ms;
+letting that land on a newborn cloth's first solver steps opened the mainsail to **99 edges past
+25 % with 12 cm of seam** — while the very check that watches the birth frame read a perfectly
+normal **0,013 s**. So the guard on `delta_estable` was reporting a clean birth on a cloth that
+was being torn apart immediately afterwards.
+
+`mar.gd` now waits for every cloth to be mounted AND a further `MARGEN_ASENTADO` (2,5 s) before
+it starts the fine disc. With it: 1 and 0 edges, three runs. Whatever gets added to the startup
+later has to respect the same thing — a cloth needs its first couple of seconds of quiet, not
+just its first frame.
+
+**Three cloth checks in the battery are UNSTABLE on this machine, and all three predate the sea
+work.** Written down because the same trap caught me twice in one session: a check that goes red
+after a change looks like a regression, and three clean runs of the old code look like proof it
+was one. Measure the baseline until you have seen its RANGE, not its first value.
+
+- `mundo` / "'<cloth>' comes back unstretched", after cycling the fleet with TAB. On the code as
+  it was before the sea: the flag reads **0,071 / 0,080 / 0,084 / 0,094** against a 0,060 cap —
+  four runs, four failures — and the mainsail 0,032-0,038 against 0,020. With the new sea the
+  numbers land in the same band. Ruled out by measuring: the sea's per-frame cost (dropping the
+  mesh to 128 × 128 changes nothing), the groups and the wave height.
+- `tela` / "'jib': no edge stretched past 25 %" — see below.
+
+**The jib's stray edge is NOT caused by any of that, and it is not new.** It is worth writing
+down because it cost a session: the jib reads 1 or 2 edges past 25 % from run to run against a
+cap of 1, it looked exactly like a regression from the sea work, and three clean runs on the old
+sea seemed to confirm it. Six runs on the old sea say otherwise: **1, 1, 2, 2, 2, 2** — already
+intermittent, already hitting 2, before any of this existed. Three runs are not enough to call
+something a regression when the thing is intermittent. Ruled out by measuring: the birth frame
+being slow (it no longer is), the birth order, the curvature of the ship's float height
+(`Horizonte.activa = false` gives 2, 1, 1 just the same) and waiting longer to be born (30
+stable frames gives a repeatable 3, worse). Instanced on its own with no world around it the same
+jib gives **0 of 574 edges**, three times running, so the cloth is fine and it is the startup
+that is doing it. The metric cap — the one that actually guards against a tear — holds at
+0,016-0,030 m against 0,030. Still open.
+
 **Physical cloth must not be born during a stutter.** `TelaFisica` waits for a few consecutive
 normal frames before building its `SoftBody3D`. At scene start there are frames of 0.12-0.14 s
 (model load, shader compilation), and in one of those the engine runs ~7 physics steps back to
-back while the anchors are only repositioned ONCE per frame, in `_process`: the cloth falls seven
-steps with its anchor points frozen, tears away from the spar, and the solver never closes those
-edges again. Measured on the balandra: one 0.122 s frame took the mainsail from 0 to 63 edges
+back while the anchors were only repositioned ONCE per frame: the cloth fell seven steps with its
+anchor points frozen, tore away from the spar, and the solver never closed those edges again.
+(That is the same root cause as the paragraph above, so the guard may no longer be needed — but it
+has not been measured without it, so it stays.) Measured on the balandra: one 0.122 s frame took the mainsail from 0 to 63 edges
 stretched over 25 %, and there it stayed. This is why a ship respawned with TAB — born with the
 game already running — used to come out clean while the one at startup did not.
 
@@ -323,7 +456,21 @@ ONE mesh (`Mesh_0`, 444,835 verts in the lancha) and the red channel of `Col` de
 The balandra does bring each cloth as its own mesh. So a "sail" is defined by its rig, not by
 being a separate piece of geometry.
 
-**The flag is SHADER cloth, not a `SoftBody3D`** (9 September 2026). Its luff is stitched 54,8 mm
+**The flag went back to being PHYSICAL on 10 September 2026** (`BanderaFisica` in
+`balandra.tscn`), because the wrap described below was measured while the apparent wind was still
+broken and never re-measured after. Re-measured with `Viento.velocidad_m_s` at 16, three runs: at
+the worst frame of a 170° turn there are 4 free points 88-92 mm from the mast axis — the mast is
+46 mm of radius there, so **two radii, brushing past outside** — none inside the timber, and the
+fly holds at 0,49 m. Before it was 19 points, the deepest at 4 mm, 10-11 still stuck 5 s later and
+the fly collapsed to 0,28. `tela_test.gd` checks it on every run.
+
+And the symptom that started all of this was neither the wrap nor the bone: it was the pinned
+points not being moved between render frames (see the anchor paragraph above). The flag's own
+column of anchors was the clearest place to see it.
+
+The reasoning from when it was retired follows, and the geometry in it is still true:
+
+**The flag WAS SHADER cloth, not a `SoftBody3D`** (9 September 2026). Its luff is stitched 54,8 mm
 from the mast axis and the mast is 46 mm of radius there — **nine millimetres of clearance for a
 960 mm sheet**. Bear away and the bone carries the luff round the pole, the free cloth lags and
 ends up on the other side; once wrapped it does not come out until the ship stops. Measured on a
@@ -366,6 +513,200 @@ apparent); "points to leeward" with the ship stopped is near tautological, becau
 `direccion_de_vuelo()` turns the rest direction by the very angle computed to point at the wind.
 The seam check moved to the MAINSAIL, which is still physical and had carried that defect
 uncovered since September.
+
+## The sea
+
+**Phase 1 of the sea plan, done 11 September 2026: the sea is visible.** Before it, the water
+`PlaneMesh` had **no `subdivide`** — four vertices, in the corners, 250 m away — so the wave
+function the shader had carried from the start was never drawn once. The ship still bobs on its
+own `sin()` with no relation to the water; making it follow the sea is phase 2.
+
+**Gerstner waves, and the function lives TWICE on purpose.** `assets/shaders/oleaje.gdshaderinc`
+draws it and the `Oleaje` autoload answers it, because nothing can be shared between a shader and
+GDScript. What is shared is the COEFFICIENTS: `Oleaje` computes k, amplitude, Q and omega once
+and `aplicar()` pushes them, so the only thing duplicated is the sum itself — and the **clock**
+is one too (`ola_t`, pushed as a uniform, never the shader's own `TIME`, which cannot be read
+back from GDScript and would drift silently).
+
+`tools/espejo_oleaje.tscn` compares the two point by point, and `mundo_test.gd` asserts it every
+run. It reads a shader function the only way there is: rendering it to a `SubViewport` — one
+pixel per point, one value per pass, split across red and green for 16 bits (0,25 mm). **In 8
+bits, not half precision:** a `SubViewport` with `use_hdr_2d` never gets painted (measured: it
+returns garbage), while the 8-bit one does not touch the colours at all (written 0,25 → read
+0,25098, exactly its quantisation). With a sign flipped in the shader the check reads **0,964 m**
+against 0,000.
+
+**Q is how much the crest sharpens (0 to 1); the GPU Gems limit `1/(k·A·N)` is a CAP, not the
+value.** Using the cap as the value cancels the amplitude —Q·A is what the water slides
+horizontally, and `pendiente/(k·A·N) · A = pendiente/(k·N)` has no A in it— so the drag came out
+**constant: 3,605 m peak to peak, the same number with the wind at 0,15 as at 1,0**. On a 21 cm
+sea in a calm, the water slid three and a half metres back and forth, and from the deck it read
+as *the ship surging forward and back*. It was the user who spotted it. With
+`min(pendiente, 1/(k·A·N))` the drag tracks the sea: **0,12 / 0,90 / 2,70 m** at wind 0,15 / 1,0
+/ 1,8, always under the wave height, which is what a circular orbit means. The test asserts
+exactly that — drag ≤ height — because it is the shape of the error, not its size, that gives it
+away.
+
+**Turning the wave field drags the whole sea sideways, and it gets worse the further you sail
+from the world origin.** Rotating the field shifts every point's phase by `k·D·Δangle`, where D
+is its distance to the origin, so the crest moves at `D·Δangle/s` on top of its own speed.
+Feeding it `Viento.direccion` — which wobbles 0,12 rad at 0,08 Hz — measured with
+`tools/velocidad_de_las_olas.tscn`: over the origin the crest ran at its proper 6 m/s, at 100 m
+it swung between 0 and 12, and at 300 m between **−6 and +18**, i.e. it went backwards at six
+metres a second. The user reported it as the sea starting off fine and *speeding up after a
+while, surging back and forth* — which is exactly the shape of it, because the effect grows as
+you sail away from the origin.
+
+It is geometric and cannot be fixed, only made slow: the sea now takes its heading from
+`Viento.direccion_base` (a sea does not change direction with each gust) through a **90 s**
+filter, far longer than the 25 s the height uses, because a raised sea turns much slower than it
+grows. The test measures crest speed **at 300 m from the origin on purpose** — over the origin
+the effect is zero and everything looks right.
+
+**The mesh is GENERATED in `mar.gd`, not taken from the scene, and it is one stretched grid, not
+rings.** A uniform fine grid is not an option — 800 × 800 m at half a metre is 2,5 million quads
+to get four of them near the ship. The grid is uniform in its parameter and stretched on the way
+to the world (a linear part that sets the centre cell, plus a cube that grows it outwards), so
+the cell runs from **0,62 m by the camera to 13 m at the edge** with the same vertex count
+everywhere, and there are no seams because it is a single grid. It follows the camera in **steps
+of one fine cell**: moved freely, the vertices slide over a wave that lives in world coordinates
+and the surface appears to boil.
+
+What is fixed is the CELL SIZE next to the camera (`celda_cerca`, 0,62 m) and the stretch is
+derived from it, not the other way round: what has to be guaranteed is that the shortest wave —
+7 m — gets its eight points in the foreground, and the cell can then grow on its own towards the
+rim. Measured with `tools/relieve_del_mar.tscn` (512 × 512 cells, radius 1200): **8,30 points
+per shortest wave in the first 25 m, 18,83 per dominant wave out to 200**, and **1,3-2,0 ms per
+frame** (284-387 fps against 619-1.116 with the water hidden, fps cap off — the spread is the
+machine, not the mesh).
+
+**It is a DISC, not a square, and it is two meshes.** A square shows its corners: raising the
+camera you could see the edge of the water and, past it, the flat blue the sky paints below the
+horizon. The square grid is carried onto the disc by the elliptical mapping
+(`x·√(1−y²/2)`, `y·√(1−x²/2)`), which sends the square's border EXACTLY onto the circle and
+leaves no degenerate vertex at the centre, which a polar grid would. And the detail cannot just
+be stretched to the horizon: raising the fine disc from 400 to 1500 m drops the foreground from
+8,85 points per wave to **4,9** at the same vertex count. Raising the count pays for it —
+512 × 512 with a 1200 m radius keeps 8,30 points in the foreground and costs the same
+milliseconds, because what the water costs is fragment work and not vertices. Past the disc, a
+flat **skirt** carries the water out to 20 km —
+where it starts, the LOD has already faded even the longest wave, so it is smooth water, joins
+without a seam and costs nothing (128 × 16 quads). The wave alcances are capped at 0,95 × the
+disc radius so nothing is still moving at the joint.
+
+**The skirt's winding is NOT the disc's.** Copied across, it faces down and the whole thing
+vanishes — it does not show up even painted bright red, which is how it was found. In the disc
+the grid's two directions are x and z; in the skirt they are the angular and the radial one, and
+that swap flips the face orientation.
+
+**The horizon curves, and that is what makes the edge of the sea disappear.** `Horizonte` (an
+autoload) holds `d²/2R`, the water sinks by it in `agua.gdshader`, and `Barco` subtracts the same
+amount from its own float height — *the same number in both places, or a distant ship floats
+above its own water*. It buys two things at once: the disc's rim falls below the horizon line
+instead of ending in a visible edge, and a distant ship goes down **hull first, sails after, the
+masthead last**, the way a ship really disappears. `Barco` hides itself once not even the
+masthead is above water, and it takes its own height from its meshes (10,24 m on the sloop).
+
+Measured with `tools/tras_el_horizonte.tscn`: at 2 km a ship sinks 0,31 m, at 5 km 1,96, at 11 km
+9,49, and at 20 km 31,39 — gone. The catch worth knowing before tuning it: **on a real-sized
+Earth the curvature never gets to be the thing that hides a ship**, because at 5 km she is
+already 1,7 pixels tall at 1080p. `Horizonte.radio_tierra` is the one knob — the horizon goes as
+√R and the sinking as 1/R — and the planet this world got, chosen off that table, is **a tenth of
+Earth**: horizon at 1,60 km from the deck, the hull starting to go at 1,51 km and a sloop gone
+entirely at 3,61. At that size the numbers above become 0,19 m at 500 m, 0,78 at 1 km, 3,13 at
+2 km and 19,6 at 5, where she is already gone.
+
+It is subtracted from the SHIP and not from its model so that the rig and the canvas go down with
+it: the sails are `SoftBody3D` in world space and follow their anchors, which hang off the
+skeleton. On the player's own ship it does nothing, and not as a special case — the camera rides
+with her, the distance is metres and the drop goes as the SQUARE of it: 0,8 mm at 100 m.
+
+Camera `far` went from Godot's default 4.000 to **25.000** in both ship cameras and the player's,
+or the sea ends in a cliff at four kilometres, which is the thing being fixed.
+
+**Waves get a LOD by distance, and it is the only thing that kills the moiré.** A 7 m wave over
+3 m cells does not draw as a wave: it draws as a regular lace of scales that boils, which is the
+interference pattern between the wave and the grid and looks nothing like either. Each train is
+faded out where the cell stops having four points per wave — `mar.gd` computes that distance from
+its own stretch function by bisection and hands it to `Oleaje.alcances`.
+
+**And the fade needs to be LONG, or the seam shows.** With one distance per train the sea went
+from having waves to being glassy over a short stretch and you could see the join — the user
+reported it, and the number agreed: the waves died at 380 m with the horizon at 1,6 km, so more
+than a kilometre of flat water. Each train now carries TWO distances: it starts losing amplitude
+where the cell only gives it eight points per wave and is gone where it gives three
+(`PUNTOS_BUENOS` / `PUNTOS_MIN`), which is a long fade tied to what the mesh can actually draw
+rather than to a number picked by eye. For the 37 / 23 / 13 / 7 m trains that is
+**287-1.135 / 151-578 / 70-262 / 26-114 m**. The fine relief (ripple and wake, 2,5 m and 90 cm of period)
+fades at 90 m for the same reason. **The LOD is for what is DRAWN only**: `altura_en()` never
+carries it and the attenuation is exactly 1 at zero distance, so the sea near the camera — where
+anything that floats is — is the same one that is calculated. A uniform array cannot carry a
+default value in GLSL, so an alcance of 0 means "no LOD": a material nobody feeds shows the whole
+wave instead of going flat.
+
+**Reading the height where you ask for it is not `desplazamiento(q).y`.** In Gerstner the point
+that ends up over `q` did not start at `q` — the wave dragged it towards the crest — so
+`altura_en()` solves that fixed point (three passes are enough while `pendiente` stays under 1).
+Skipping it shifts the reading by half a wavelength on the face of the wave, which is exactly
+where it changes fastest.
+
+**The state of the sea follows the wind, with the wave height going as the SQUARE of it**
+(Pierson-Moskowitz), through a 25 s first-order filter. The filter is not cosmetic: `Viento`
+gusts at 0,1-0,5 Hz and without it the sea breathes at the rhythm of the gusts, which reads as a
+heartbeat and not as a sea. Scale is deliberately short of reality — at `Viento.velocidad_m_s`
+16 (31 knots, force 7) a real sea would be 5,5 m of significant height, a permanent gale over a
+12 m sloop. `altura_fondo` (18 cm) is the swell that is there with no wind at all, because dead
+flat is what we set out to fix.
+
+**Wavelengths are CHOSEN, wave speeds are not**: each train's speed comes from the deep-water
+dispersion relation, which is what makes the motion read as water even though the sizes are not
+the ones that wind would raise.
+
+**A sea made of a few plane waves repeats, and the eye catches it.** The user saw it before any
+measurement — "the waves look very regular" — and `tools/patron_del_mar.tscn` put a number on
+it: the autocorrelation of the height field away from the origin, i.e. how much the sea looks
+like itself shifted. With four trains it read **0,997 at 20 m**: the sea was all but identical to
+itself twenty metres over. Summing plane waves always leaves a shift where all of them line up
+again, and the fewer there are the closer it falls.
+
+Three things fixed it, and it took all three:
+
+- **Eight trains instead of four**, at 53 / 41 / 28,3 / 22,7 / 15,1 / 11,9 / 8,6 / 6,9 m and
+  3 / −41 / 22 / −68 / 55 / −14 / 74 / −33° off the wind. No length is a rough multiple or
+  divisor of another and they do not follow a progression — a geometric one has a constant ratio
+  and produces line-ups again. The shortest does not go below 7 m because the water mesh cannot
+  resolve it next to the camera, and a wave the grid cannot draw comes out as the pattern it
+  makes with the grid. That alone took it to 0,963, and moved the line-up out to 132 m.
+- **Groups.** Each train's amplitude is modulated by a slow envelope of its own (`GRUPOS`,
+  145-310 m, travelling at the group velocity — half the phase velocity, as in deep water), so a
+  train is not equally strong everywhere. The line-up can no longer happen because the envelopes
+  would have to line up too, and it is how a real sea behaves: waves arrive in groups.
+- **The fine ripple was two perpendicular sines** — `sin(x)·cos(z)`, which is a GRID, and up
+  close it read as exactly that: regular squares on the water, the most recognisable thing the
+  sea had. It is now three diagonal ripples at 2,7 / 1,7 / 1,2 m, neither perpendicular nor
+  commensurate.
+
+Final: **0,850 peak, 0,271 mean** (against 0,997 and 0,434), and the cost went from 1,5 to
+**1,75 ms** per frame. What is left of the peak is the dominant train — any sea with a spectral
+peak is anticorrelated with itself half a wavelength over, and that one is physics, not an
+artefact.
+
+**And the sea comes out lower than its nominal height, because the eight trains cross and cancel
+and each one dips between its groups.** `altura_viento` is 1,9 and the sea measures 1,60 m peak
+to peak over 300 m of water. Measure it over SPACE, not at one point over time: with groups, a
+single point can spend the whole window in the gap between two of them and report a calm.
+
+**Foam comes from the crest sharpening, not from the height** — it is the same Q·k·A·sin term
+that narrows the crest, so it lands where the wave breaks without inventing anything.
+
+**Measure the sea across SPACE, not across time.** The dominant wave takes 4,9 s to pass, so a
+peak-to-peak measured at one point over a second and a half depends on the phase you happened to
+catch and returns a different number every run — it went red on its own the moment an unrelated
+change shifted the phase. A 120 m grid covers three dominant wavelengths in one shot and gives
+the same number every time.
+
+`tools/foto_mar.tscn` shoots the three sea states from two viewpoints, because neither "1,6 m of
+wave" nor "8,30 points per wave" says whether it looks like water.
 
 ## Rigging the ship models (Blender)
 
@@ -606,3 +947,25 @@ which carries a `.gdignore` so Godot never scans it:
 - `blender_src/` — the pipeline scripts (`partes_barco.py`) and the `marcado_<barco>.json`
   files. `exportar_glb()` derives the `.glb` name from the `.blend` basename, so **renaming a
   `.blend` renames the asset Godot consumes**.
+
+**The heavy files live in Google Drive, and `sincronizar_drive.ps1` is what puts them there.**
+The repository carries the code, the scenes and the `.import` files with their `uid://`;
+`.gitignore` keeps the binaries out and `fuentes/` is 24 GB of them. The destination is the
+shared `marea_negra` folder of *My Drive*, mounted in streaming as `G:` — 5,93 GB in 793 files.
+The script **simulates by default** and needs `-Ejecutar` to copy anything, so run it and read
+the summary before moving data. **Pushing to git and syncing Drive go together:** when
+asked to upload the changes, do both — the repository alone backs up none of the Blender work.
+
+What it excludes is 18,4 GB of crash-recovery material: any `respaldos/` folder (11,2 GB of
+session snapshots), `*.bak` plus `balandra_piezas_recuperado.blend` and `_rec2.blend` (6,3 GB
+rescued from a truncated `.blend`), and `*.blend1` (1 GB of Blender's own backups). Also `.git`,
+`.godot` and `licencias/` — that last one is personal data and the Drive folder is shared.
+
+Three traps, all of them the reason the copy is a script and not a synced folder:
+**never work inside the synced folder** (Blender rewrites the whole `.blend` on every save, and
+`balandra_alta.blend` is 1,2 GB); **never put `.git` in it** — Drive uploads file by file with no
+transaction, so the `index` or the refs end up half-written and the repository is corrupt, which
+is why the history lives in GitHub (`jorgeluislr/marea-negra`); and **Drive drops the NTFS
+`Zone.Identifier` streams**, so `fuentes/crudo/_zone_identifier_respaldo.txt` is what preserves
+the Meshy provenance and has to be kept current. Drive's own cache sits in `E:\DriveFS_cache`
+because the system disk is under 3 GB free.

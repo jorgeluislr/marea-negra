@@ -1,9 +1,18 @@
 shader_type spatial;
-render_mode cull_back, diffuse_burley, specular_schlick_ggx;
+render_mode cull_back, diffuse_burley, specular_schlick_ggx, world_vertex_coords;
 
-// Agua opaca reflectante (portada de game-2d). El reflejo lo aporta el SSR del
-// WorldEnvironment. La estela (rastro de anillos) la rellena el script mar.gd con
-// la posición del barco.
+// Agua del juego. La FORMA de la ola no está aquí: está en `oleaje.gdshaderinc`, que es la
+// misma definición que responde el autoload `Oleaje` a quien pregunte desde GDScript. Aquí
+// solo se deforma la malla con ella y se pinta.
+//
+// `world_vertex_coords` porque el oleaje se evalúa en coordenadas de MUNDO: la malla del agua
+// persigue a la cámara, y si la ola dependiera de la posición local viajaría con ella — el mar
+// se quedaría quieto respecto al barco por mucho que el barco navegue.
+//
+// El reflejo lo aporta el SSR del WorldEnvironment. La estela (rastro de anillos) la rellena
+// `mar.gd` con la posición del barco.
+#include "res://assets/shaders/oleaje.gdshaderinc"
+
 uniform vec4 color_agua : source_color = vec4(0.04, 0.16, 0.24, 1.0);
 uniform float rugosidad : hint_range(0.0, 0.4) = 0.05;
 uniform float especular : hint_range(0.0, 1.0) = 0.5;
@@ -15,11 +24,19 @@ uniform float vida_estela = 3.0;
 uniform float vel_expansion = 1.6;
 uniform float amplitud_estela = 0.08;
 uniform float espuma_intensidad : hint_range(0.0, 1.0) = 0.15;
-
-// Oleaje ambiente (olas grandes suaves de mar abierto).
-uniform float ola_amplitud : hint_range(0.0, 0.2) = 0.03;
-uniform float ola_escala : hint_range(0.1, 5.0) = 0.8;
-uniform float ola_velocidad : hint_range(0.0, 3.0) = 0.6;
+// Espuma de las crestas: aparece cuando la ola se afila hasta romper, no cuando está alta.
+uniform float espuma_cresta : hint_range(0.0, 1.0) = 0.5;
+uniform float rizado = 0.005;           // detalle fino, solo para la normal
+// A partir de dónde se apaga el relieve fino, en metros. Mismo motivo que `ola_alcance`: el
+// rizado tiene 2,5 m de período y la estela 90 cm, así que a media distancia ya no son un
+// relieve sino un encaje regular que hierve con la cámara.
+uniform float alcance_fino = 90.0;
+// Curvatura de la Tierra: el agua lejana se hunde `d²/2R`. Es lo que hace que el disco de agua
+// no se acabe en un canto visible —a 20 km cae 31 m, que desde la altura de un palo es
+// exactamente donde está el horizonte— y lo que obliga a que todo lo que flote lejos se hunda
+// igual, o flotaría por encima de su propia agua. Lo pone `mar.gd` desde el autoload
+// `Horizonte`, que es quien lleva el número.
+uniform float radio_tierra = 6371000.0;
 
 // ── Recorte del casco ────────────────────────────────────────────────────────
 // Quita (discard) el agua dentro de la silueta del barco, en SU espacio local
@@ -35,16 +52,28 @@ uniform float recorte_proa_exp = 0.8;   // proa (extremo +eslora): puntiaguda
 uniform float recorte_popa_exp = 0.4;   // popa (extremo -eslora): redondeada
 
 varying vec3 world_pos;
+// Dónde estaba este punto ANTES de que la ola lo arrastrase. Hace falta guardarlo porque en
+// Gerstner el punto se corre también en horizontal: la normal y la espuma se evalúan en el
+// punto de reposo, no donde acabó.
+varying vec2 reposo;
+// Distancia horizontal a la cámara: es lo que decide cuánta ola se puede dibujar aquí.
+varying float lejania;
 
-float altura(vec2 p) {
-	// Oleaje ambiente de mar abierto.
-	float h = sin(p.x * ola_escala + TIME * ola_velocidad) * ola_amplitud;
-	h += cos(p.y * ola_escala * 1.3 - TIME * ola_velocidad * 0.9) * ola_amplitud;
-	// Rizado fino.
-	h += sin(p.x * 2.5 + TIME * 1.1) * 0.005;
-	h += cos(p.y * 3.0 - TIME * 0.9) * 0.005;
 
-	// Anillos de estela expandiéndose y desvaneciéndose.
+// Relieve de la estela y rizado fino. Van aparte del oleaje porque no deforman la malla, solo
+// la normal: el anillo de estela tiene 8 cm de amplitud y un período de 90 cm, y la celda de
+// la malla junto al barco mide 75 — no hay con qué dibujarlo, pero en la normal sí se ve.
+float relieve_fino(vec2 p, float atenua) {
+	if (atenua <= 0.001) {
+		return 0.0;
+	}
+	// Tres rizos en diagonal, con longitudes que no guardan relación (2,7 / 1,7 / 1,2 m).
+	// Eran dos, uno en x y otro en z: dos senos perpendiculares son una REJILLA, y de cerca se
+	// veía como tal —cuadrícula regular sobre el agua—, que es lo más reconocible que tenía el
+	// mar. Ni perpendiculares ni conmensurables, y deja de leerse como patrón.
+	float h = sin(dot(p, vec2(0.87, 0.49)) * 2.3 + ola_t * 1.1) * rizado;
+	h += sin(dot(p, vec2(-0.36, 0.93)) * 3.7 - ola_t * 0.9) * rizado * 0.8;
+	h += sin(dot(p, vec2(0.62, -0.78)) * 5.1 + ola_t * 1.6) * rizado * 0.6;
 	for (int i = 0; i < MAX_ESTELA; i++) {
 		if (estela[i].w < 0.01) {
 			continue;
@@ -56,12 +85,18 @@ float altura(vec2 p) {
 		float fade = clamp(1.0 - edad / vida_estela, 0.0, 1.0);
 		h += sin((d - edad * 5.0) * 7.0) * amplitud_estela * anillo * fade * estela[i].w;
 	}
-	return h;
+	return h * atenua;
 }
 
+
 void vertex() {
-	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	reposo = VERTEX.xz;
+	lejania = distance(reposo, CAMERA_POSITION_WORLD.xz);
+	VERTEX += oleaje_desplaz_lod(reposo, lejania);
+	VERTEX.y -= lejania * lejania / (2.0 * radio_tierra);
+	world_pos = VERTEX;
 }
+
 
 void fragment() {
 	// Recorte del casco: si este punto del agua cae dentro de la silueta del barco,
@@ -84,17 +119,23 @@ void fragment() {
 		}
 	}
 
-	// Normal por píxel a partir del campo de altura (nítida, no depende del mallado).
-	float h = altura(world_pos.xz);
+	// Normal de la ola: analítica, no por diferencias finitas. El punto se desplaza también en
+	// horizontal, así que restar dos alturas medidas en x y en x+e no da la pendiente que se ve.
+	vec3 n_mundo = oleaje_normal_lod(reposo, lejania);
+	// Encima, el relieve fino (estela y rizado), ese sí por diferencias finitas.
+	float fino = 1.0 - smoothstep(alcance_fino * 0.5, alcance_fino, lejania);
+	float h = relieve_fino(world_pos.xz, fino);
 	float e = 0.08;
-	float hx = altura(world_pos.xz + vec2(e, 0.0));
-	float hz = altura(world_pos.xz + vec2(0.0, e));
-	vec3 n_mundo = normalize(vec3(-(hx - h) / e, 1.0, -(hz - h) / e));
+	float hx = relieve_fino(world_pos.xz + vec2(e, 0.0), fino);
+	float hz = relieve_fino(world_pos.xz + vec2(0.0, e), fino);
+	n_mundo = normalize(n_mundo + vec3(-(hx - h) / e, 0.0, -(hz - h) / e));
 	NORMAL = normalize((VIEW_MATRIX * vec4(n_mundo, 0.0)).xyz);
 
 	vec3 col = color_agua.rgb;
-	float espuma = smoothstep(0.05, 0.09, abs(h));
-	col = mix(col, vec3(0.85, 0.92, 1.0), espuma * espuma_intensidad);
+	// Dos espumas: la de la cresta que rompe y la del rastro del barco.
+	float espuma = smoothstep(0.45, 0.95, oleaje_pico(reposo, lejania)) * espuma_cresta;
+	espuma = max(espuma, smoothstep(0.05, 0.09, abs(h)) * espuma_intensidad);
+	col = mix(col, vec3(0.85, 0.92, 1.0), espuma);
 
 	ALBEDO = col;
 	ROUGHNESS = rugosidad;

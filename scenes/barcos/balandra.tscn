@@ -87,6 +87,15 @@ script = ExtResource("4")
 nombre_malla = "foque"
 mando = 0
 aparejo = SubResource("Aparejo_foque")
+; A 60 Hz este pano nacia con 1 arista pasada del 25 %, y NO cerraba (a los 9 s seguia ahi).
+; No es el solver: con precision 5, 10 y 20 sale exactamente la misma. Es el frame en que nace
+; -`delta_estable` vale 1/30 s, que a 60 Hz son DOS pasos de fisica dentro del frame del
+; montaje-, asi que se le exige un frame de un solo paso.
+delta_estable = 0.0167
+; Y las iteraciones se DUPLICAN al bajar la fisica de 120 a 60 Hz, para que el trabajo del
+; solver por segundo se quede igual: la mitad de pasos con las mismas iteraciones dejaba este
+; pano rozando sus topes en las tres medidas a la vez.
+precision = 10
 ; FLAMEO al desventar. En fachada la lona pegaba un chasquido entero cada ~6,4 s —medio ciclo
 ; del bamboleo de direccion del viento, justo donde la percha gira mas rapido— en vez de flamear:
 ; pico 4,0 veces la mediana. No era el trimado ni las capsulas ni el bamboleo del casco; es que
@@ -116,7 +125,22 @@ masa = 48.0
 ; iteraciones ya bastan y 30 apenas mejora (1,62 %) por el triple de coste. La rigidez se queda
 ; en el 0,5 del foque: subirla no servia y reintroduce el "palo imaginario" junto a los bordes.
 rigidez = 0.5
-precision = 10
+; 20 y no 10 desde que la fisica va a 60 Hz: mismas iteraciones por segundo que antes.
+precision = 20
+; EMPUJE 56 y no los 7 por defecto. El 10 de septiembre de 2026, al empujar los anclajes al
+; servidor de fisica en CADA paso, este pano se quedo visiblemente plano: el salto de hasta
+; 218 mm por frame que pegaban las anclas metia energia y hacia de barriga falsa. Medido con
+; tools/hinchado_mayor.tscn, hinchado medio de los puntos libres respecto a su piel:
+;   empuje  7 -> 0,126 m   (plano; es lo que se veia)
+;          40 -> 0,308 m
+;          56 -> 0,342 m   estiramiento 0,0143 de 0,020
+;          80 -> 0,379 m   estiramiento 0,0178, ya sin margen
+; Se queda en 40 y no en 56: con 56 la suite dejaba el nacimiento en 0,017 de 0,020 y la costura
+; navegando clavada en el tope de 0,010. Con 40 hay margen y el pano ya no se ve plano.
+; La banda buena historica de este pano era 0,296-0,395 m de media con ~142 vertices por encima
+; de 0,5 m; con 56 son 152. El FOQUE no lleva esto: con 7 ya esta en 0,261 m, y a 56 se iria a
+; 0,0235 de estiramiento, por encima del tope.
+empuje_viento = 40.0
 ; Sin colision con las capsulas de palo: el pie/pico/relinga ya estan anclados a los palos,
 ; asi que la capsula solo empujaba el pano y creaba un "angulo" a lo largo de la botavara.
 capa_perchas = 0
@@ -132,35 +156,50 @@ flameo_por_desventa = 0.3
 [node name="DepurarVela" type="Node3D" parent="."]
 script = ExtResource("5")
 
-[node name="BanderaShader" type="Node3D" parent="."]
-script = ExtResource("10")
-; La bandera es tela de SHADER y no `SoftBody3D`, como la de la lancha. La fisica no puede
-; sostenerla: su gratil va cosido a 54,8 mm del eje del mastil, que ahi tiene 46 mm de radio, o
-; sea NUEVE MILIMETROS de holgura para un pano de 960 mm. Al virar, el hueso lleva el gratil
-; alrededor del palo, la lona va con retraso y termina al otro lado; una vez envuelta no sale.
-; Medido en un viraje a sotavento: de 0 puntos a menos de 100 mm del eje se pasaba a 19, con el
-; mas hondo a 4 mm (dentro de la madera), y 5 s despues seguian 10-11 pegados.
+[node name="BanderaFisica" type="Node3D" parent="."]
+script = ExtResource("6")
+; PRUEBA EN CURSO: la bandera vuelve a ser FISICA, para revisarla en el juego. Para volver al
+; shader basta `git checkout scenes/barcos/balandra.tscn tests/tela_test.gd`; el nodo de antes
+; era `BanderaShader` con `ExtResource("10")`, `nombre_malla = "bandera"` y la geometria de
+; colision del casco de la LANCHA apagada (mastil_radio 0, cabos_* y perchas_* vacios).
 ;
-; Descartado midiendo, todo: velocidad de giro del hueso (1,2 / 6 / 12 igual), la capsula del
-; mastil con y sin ella (10 vs 11 puntos pegados), el flameo, el empuje (10 a 70), el solver
-; (rigidez 0,3-0,95, precision 10-30, masa, arrastre: 104-108 mm planos) y la frecuencia de
-; fisica (60/120/240/480: arregla la costura, no el envuelto). Y una restriccion dura que sacaba
-; cada paso los puntos metidos en el palo -se ejecutaba, sacaba 7-9 por paso- la deshacia el
-; solver, porque el enrollado es TOPOLOGICO: hay tela al otro lado del palo tirando.
+; POR QUE SE REINTENTA. El fallo que se veia -"la bandera no rola, se queda pegada mientras el
+; pano vuela bien"- tenia DOS causas distintas, y las dos se curaban al fondear, asi que se
+; confundieron en un solo sintoma:
 ;
-; Con el shader es imposible por construccion: el giro a sotavento es RIGIDO y entero (lo
-; calcula `TelaShader._giro_bandera` y lo aplica el vertex shader), asi que no hay lona que
-; pueda quedarse al otro lado. Y no hace falta subclase: `TelaShader` ya trae la rama de
-; bandera -anclaje y direccion de reposo salen del canal verde de `Col`, que esta malla trae
-; a 1,000 en sus 187 vertices-.
+;   1. El VIENTO APARENTE. `Viento.velocidad_m_s` valia 8 y la balandra corre a 9; con las
+;      rafagas, `fuerza * 8` va de 4,4 a 11,6 m/s. En popa el aparente CAMBIABA DE SIGNO varias
+;      veces por segundo, el objetivo de `orientar()` saltaba 180 grados adelante y atras y
+;      `lerp_angle` no llegaba a ninguna parte: el hueso se quedaba temblando cerca del reposo
+;      mientras el pano volaba bien -el `SoftBody` viaja por el mundo y encuentra el aparente el
+;      solo-. Medido: 160,6 grados entre el hueso y su propia tela. Arreglado: 16 m/s, 21,6.
+;   2. El ENROLLADO alrededor del palo, topologico, que es lo que motivo el shader.
+;
+; Y lo que NO esta medido es si el 2 sigue saliendo ahora que el 1 esta arreglado: las dos
+; investigaciones se solaparon y el enrollado nunca se volvio a medir con el aparente ya bueno.
+; Esa cifra la da ahora `tela_test.gd`, que cuenta los puntos metidos en el palo tras un viraje
+; a sotavento y 5 s despues -0 y 0 es que la fisica vale; 19 y 10 es el numero de septiembre-.
+;
+; Las anclas nunca estuvieron sueltas del hueso, por si alguien lo sospecha: los 187 vertices de
+; esta malla y sus 11 anclas (Col.b > 0.5) estan pesados al 100 % a `giro_bandera` -medido en el
+; .glb-, y `TelaFisica._colocar_anclas()` las lleva con la matriz de ese hueso.
 nombre_malla = "bandera"
-; Sin colision de vela: esos valores son del casco de la LANCHA y la rama de bandera del shader
-; no los usa, pero se apagan para no dejar geometria ajena.
-mastil_radio = 0.0
-cabos_a = PackedVector3Array()
-cabos_b = PackedVector3Array()
-perchas_a = PackedVector3Array()
-perchas_b = PackedVector3Array()
+; El empuje tiene que superar con holgura la marcha del barco, o el pano se queda flojo en popa:
+; el campo de viento es una ACELERACION y el barco arrastra la tela por el mundo, asi que su
+; propia velocidad se resta. Medido: con 10, al virar a popa el vuelo caia de 0,59 a 0,28 m y no
+; se recuperaba hasta fondear; con 35 aguanta 0,42, el 69 % de lo que vuela de traves.
+empuje_viento = 35.0
+; Mas viento pide un solve mas firme: con `precision` 5 se pasaban 4 aristas del 25 % de
+; estiramiento contra un limite de 3. Y a 60 Hz hace falta el doble: con 10, el estiramiento de
+; esta bandera al reaparecer iba de 0,014 a 0,062 contra un tope de 0,060; con 20, a 0,026.
+; Mas iteraciones, nunca un umbral mas flojo.
+precision = 20
+; Una tela que recibe el viento de canto no puede flamear sola: el campo es UNIFORME y le falta
+; la realimentacion aeroelastica -la tela desvia el aire y el aire empuja la tela-, asi que se
+; asienta en su equilibrio y se para. Sin esto media 42-45 mm de movimiento y 14 grados de
+; vuelo: bien apuntada y tiesa como un carton. Con 0,6 sube a 88 mm y 48 grados, con el
+; estiramiento intacto. La frecuencia se queda en el 1,4 por defecto.
+flameo = 0.6
 
 [node name="AudioBarco" type="Node3D" parent="."]
 script = ExtResource("7")

@@ -112,6 +112,19 @@ signal ancla_cambiada(anclada: bool)
 ## cubierta y el forro del casco la llevan girada respecto a los palos y las perchas.
 @export_group("Acabado")
 @export var acabado_madera: Array[AcabadoMadera] = []
+
+# ── Artillería ───────────────────────────────────────────────────────────────
+## Las piezas que monta el barco, cada una con su sitio y su banda. Misma idea que
+## `cargamento`: es una LISTA de datos, así que artillar más o menos es editarla, no
+## tocar la lógica de tiro. Vacía, el barco no monta nada y no paga nada.
+@export_group("Artillería")
+@export var artilleria: Array[Artilleria] = []
+## Altura de la lámina de agua: es donde acaba la parábola del tiro. Si se deja en INF se
+## busca sola en la escena (el nodo del agua), que es lo que hace falta para que la misma
+## balandra valga en el mundo y en una escena de pruebas con el mar a otra altura.
+@export var altura_mar := INF
+## Balas en la santabárbara. Cada disparo gasta una.
+@export var municion := 60
 @export_group("")
 
 const BOB_AMPLITUDE := 0.15
@@ -124,6 +137,15 @@ var anclado := false
 ## Con false el barco ignora el teclado: se pone al andar por cubierta, porque el personaje
 ## usa WASD para lo suyo y si no gobernarías el barco a la vez.
 var gobierno := true
+
+## Timón mandado, de -1 (todo a babor) a +1 (todo a estribor). Lo escribe QUIEN GOBIERNA —el
+## mando del jugador o un capitán de IA— y lo leen el casco y la caña. El barco NO lee el
+## teclado: `Input.is_key_pressed` es global, así que con dos barcos en el agua los dos
+## obedecían la misma tecla. Medido antes del cambio: dos balandras giraban +26,21° las dos,
+## idénticos a la centésima, que es la firma de estar leyendo la misma entrada.
+var orden_timon := 0.0:
+	set(v):
+		orden_timon = clampf(v, -1.0, 1.0)
 
 var velocidad := 0.0
 var time := 0.0
@@ -142,18 +164,81 @@ var _cuerpo_colisiones: StaticBody3D
 ## mientras sepa izarse. Solo hijos directos, no una búsqueda recursiva: las velas son piezas
 ## del barco puestas en su escena, no algo que aparezca en cualquier rincón del modelo.
 var _velas: Array[Node] = []
+var _canones: Array[Canon] = []
+## Batería apuntada: "estribor", "babor", "proa" o "popa". Es la que dispara.
+var banda_apuntada := "estribor"
+## Con true están vivos los controles de artillería y se dibuja la guía. Lo enciende quien
+## gobierna (el mando del jugador con B, o un capitán de IA cuando decide entrar en combate).
+var modo_battle := false
+## Línea de regala que deja `_montar_colisiones`, reaprovechada para saber a qué altura
+## pasa la borda bajo cada pieza: es lo que decide si el tiro es a barbeta o por porta.
+var _regala_centros: Array[float] = []
+var _regala_altos: Array[float] = []
+var _regala_eslora_z := true
+## Alto del barco en metros, medido de sus mallas. Decide cuándo se ha hundido del todo tras el
+## horizonte.
+var _alto := 0.0
 
 @onready var helm_position: Marker3D = $HelmPosition
 @onready var camara: Camera3D = _buscar_camara()
+
+
+
+## Y a la que va el casco: su altura de flotación, el bamboleo, y la CURVATURA de la Tierra.
+##
+## La curvatura es lo que hace que un barco lejano se hunda de abajo arriba —primero el casco,
+## después las velas, el tope del palo lo último—, que es como desaparece un barco de verdad; y
+## es la misma que hunde el agua en `agua.gdshader`, así que el casco y su mar bajan juntos. Si
+## solo se curvase el agua, un barco lejano quedaría flotando por encima de ella.
+##
+## Se resta al BARCO y no a su modelo para que la arboladura y los paños bajen con él: las velas
+## son `SoftBody3D` en espacio de mundo y van donde vayan sus anclas, que cuelgan del esqueleto.
+##
+## Sobre el barco del jugador no hace nada, y no por un caso especial: la cámara lo acompaña, su
+## distancia es de metros y la caída va con el CUADRADO de ella — a 100 m son ocho décimas de
+## milímetro.
+func _altura_de_flotacion() -> float:
+	var y := base_y + sin(time * BOB_SPEED) * BOB_AMPLITUDE
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return y
+	var hundido := Horizonte.caida_entre(global_position, cam.global_position)
+	# Cuando ni el tope del palo asoma ya no hay nada que dibujar. Sin esto el barco seguiría
+	# ahí abajo, gastando y asomando por los reflejos.
+	if _alto > 0.0:
+		visible = hundido < _alto
+	return y - hundido
+
+
+## Alto del barco, del casco al tope, medido de sus mallas. Diferido porque el modelo se
+## instancia con la escena, y saltando los `SoftBody3D`: un paño físico vive en espacio de mundo
+## y su caja no dice nada de lo que mide el barco.
+func _medir_alto() -> void:
+	var bajo := INF
+	var alto := -INF
+	for n in find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi is SoftBody3D or mi.mesh == null or not mi.is_inside_tree():
+			continue
+		var caja := mi.get_aabb()
+		var t := global_transform.affine_inverse() * mi.global_transform
+		for k in 8:
+			var y: float = (t * caja.get_endpoint(k)).y
+			bajo = minf(bajo, y)
+			alto = maxf(alto, y)
+	if alto > bajo:
+		_alto = alto - bajo
 
 
 func _ready() -> void:
 	# Cada barco flota a SU altura (una balandra grande no flota igual que la lancha).
 	position.y = altura_flotacion
 	base_y = altura_flotacion
-	# El barco se anuncia por grupo → el mar, las flechas y el HUD lo encuentran solos
-	# (sin rutas fijas), y sigue funcionando al cambiar de embarcación en runtime.
-	add_to_group("barco_activo")
+	# NO se anuncia solo como el del jugador. Lo hacía en su `_ready`, y con eso el segundo
+	# barco de la escena se declaraba "activo": el mar, el HUD, la cámara y las flechas de
+	# viento se iban con el enemigo. Quién es el barco del jugador lo decide quien le sube el
+	# jugador a bordo — `tomar_mando_jugador()`.
+	_medir_alto.call_deferred()
 	_preparar_timon()
 	for h in get_children():
 		if h.has_method("izar"):
@@ -169,26 +254,21 @@ func _ready() -> void:
 		_montar_carga.call_deferred()
 	if not acabado_madera.is_empty():
 		_montar_acabado.call_deferred()
+	if not artilleria.is_empty():
+		_montar_artilleria.call_deferred()
 	_mandar_velas.call_deferred(true)
 
 
+## El barco ya no lee teclas de maniobra ni de artillería: eso es de quien gobierna
+## (`MandoJugador` o un capitán de IA). Aquí queda solo el cambio timón ↔ cubierta, que es del
+## barco porque es él quien instancia al personaje y le da sitio en `HelmPosition`.
 func _unhandled_input(event: InputEvent) -> void:
+	if not is_in_group("barco_activo"):
+		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		# La tecla de paseo se mira ANTES de `gobierno`, que es justamente lo que está a false
-		# mientras andas: si no, no habría forma de volver al timón.
 		if event.keycode == tecla_paseo:
 			alternar_modo()
 			get_viewport().set_input_as_handled()
-			return
-		if not gobierno:
-			return
-		match event.keycode:
-			KEY_W:
-				set_vela_delantera(not vela_delantera)
-			KEY_S:
-				set_vela_trasera(not vela_trasera)
-			KEY_SPACE:
-				_set_ancla(not anclado)
 
 
 func _process(delta: float) -> void:
@@ -206,13 +286,11 @@ func _physics_process(delta: float) -> void:
 		velocidad = move_toward(velocidad, 0.0, aceleracion * 3.0 * delta)
 		velocity = -transform.basis.z * velocidad
 		move_and_slide()
-		position.y = base_y + sin(time * BOB_SPEED) * BOB_AMPLITUDE
+		position.y = _altura_de_flotacion()
 		return
 
 	# Timón: eficacia según la velocidad (más rápido = gira mejor).
-	var giro := 0.0
-	if gobierno:
-		giro = float(Input.is_key_pressed(KEY_A)) - float(Input.is_key_pressed(KEY_D))
+	var giro := orden_timon
 	var vel_norm := clampf(absf(velocidad) / maxf(0.01, velocidad_max), 0.0, 1.0)
 	var giro_efectivo := velocidad_giro * (giro_minimo + (1.0 - giro_minimo) * vel_norm)
 	rotate_y(giro * giro_efectivo * delta)
@@ -226,7 +304,7 @@ func _physics_process(delta: float) -> void:
 
 	velocity = -transform.basis.z * velocidad
 	move_and_slide()
-	position.y = base_y + sin(time * BOB_SPEED) * BOB_AMPLITUDE
+	position.y = _altura_de_flotacion()
 
 
 # ── Acciones (con señal para animar más adelante) ────────────────────────────
@@ -248,7 +326,7 @@ func set_vela_trasera(v: bool) -> void:
 	print("Vela trasera: ", "abierta" if v else "cerrada")
 
 
-func _set_ancla(v: bool) -> void:
+func set_ancla(v: bool) -> void:
 	if anclado == v:
 		return
 	anclado = v
@@ -313,13 +391,23 @@ func _aplicar_sesgo_velas(vel_norm: float, delta: float) -> void:
 ## Factor de propulsión [0..1] según el ángulo entre la proa y el viento. Público porque no
 ## solo lo usa la propulsión: el audio saca de él la cadencia del flameo (cuánto viento NO está
 ## aprovechando la vela).
+## Propulsión [0..1] con el rumbo ACTUAL.
 func factor_viento() -> float:
+	return factor_viento_en(-transform.basis.z)
+
+
+## Propulsión [0..1] de un rumbo CUALQUIERA. Se pregunta al barco y no se calcula fuera porque
+## la curva es del CASCO —su `angulo_muerto` y su `angulo_optimo`, 40° y 95° en la balandra— y
+## quien se la recalcule por su cuenta acabará creyendo que ciñe más de lo que el barco ciñe.
+## Misma razón por la que el tiro se decide con `Canon.punto_de_caida()` y no con una parábola
+## propia.
+func factor_viento_en(rumbo: Vector3) -> float:
 	var wind := Viento.direccion
 	wind.y = 0.0
 	if wind.length() < 0.001:
 		return 0.0
 	wind = wind.normalized()
-	var fwd := -transform.basis.z
+	var fwd := rumbo
 	fwd.y = 0.0
 	if fwd.length() < 0.001:
 		return 0.0
@@ -351,9 +439,9 @@ func _mover_timon(delta: float) -> void:
 	# la que vira el barco.
 	# Andando por cubierta el barco no lee el teclado: la caña vuelve al centro en vez de
 	# responder a las teclas de andar del personaje.
-	var giro := 0.0
-	if gobierno:
-		giro = float(Input.is_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_A))
+	# El signo va al revés que en el casco: con la orientación del hueso, la pala cae a la
+	# misma banda hacia la que vira el barco.
+	var giro := -orden_timon
 	if timon_invertir:
 		giro = -giro
 	var objetivo := giro * deg_to_rad(timon_angulo_max)
@@ -486,6 +574,9 @@ func _montar_colisiones() -> void:
 		mangas.append(manga)
 		cubiertas.append(cub if cub != -INF else alto)
 		hechas += 1
+	_regala_centros = centros.duplicate()
+	_regala_altos = altos.duplicate()
+	_regala_eslora_z = eslora_z
 
 	# --- borda (se puede pisar) y barrera invisible por encima
 	var suelo_y: float = lo.y
@@ -641,3 +732,147 @@ func _buscar_camara() -> Camera3D:
 func on_interact(_player: Node3D) -> void:
 	# Punto de enganche para cuando el jugador suba al timón.
 	print("El jugador subió al timón del barco.")
+
+
+# ── Artillería ───────────────────────────────────────────────────────────────
+
+## Instancia las piezas y las cuelga del barco, dentro de un contenedor, igual que la carga:
+## del BARCO y no del nodo `Modelo`, para que naveguen y cabeceen con el casco.
+func _montar_artilleria() -> void:
+	var contenedor := get_node_or_null(^"Artilleria") as Node3D
+	if contenedor == null:
+		contenedor = Node3D.new()
+		contenedor.name = "Artilleria"
+		add_child(contenedor)
+	_canones.clear()
+	for a in artilleria:
+		if a == null:
+			continue
+		var c := a.instanciar()
+		c.altura_mar = _altura_del_mar()
+		contenedor.add_child(c)
+		_canones.append(c)
+	if get_node_or_null(^"GuiaTiro") == null and not _canones.is_empty():
+		var g := GuiaTiro.new()
+		g.name = "GuiaTiro"
+		add_child(g)
+	print("%s: %d piezas de artillería (%d por banda)"
+		% [nombre, _canones.size(), canones_de("estribor").size()])
+
+
+## Las piezas de una banda. Se pregunta al cañón en vez de guardar dos listas: una sola fuente.
+func canones_de(que_banda: String) -> Array[Canon]:
+	var sale: Array[Canon] = []
+	for c in _canones:
+		if c.banda() == que_banda:
+			sale.append(c)
+	return sale
+
+
+## Dispara la banda apuntada. Devuelve cuántas piezas llegaron a responder: las que estén
+## recargando no salen, y eso es información para el HUD.
+func disparar_banda() -> int:
+	var salieron := 0
+	for c in canones_de(banda_apuntada):
+		if municion <= 0:
+			break
+		if c.disparar():
+			salieron += 1
+			municion -= 1
+	return salieron
+
+
+## Altura de la regala bajo un punto del mundo, interpolando la línea que se muestreó al
+## levantar las colisiones. Sin colisiones montadas devuelve -INF, que es lo honesto: no se
+## sabe, en vez de inventar un cero que pasaría por bueno en una comprobación.
+func altura_regala_en(pos_global: Vector3) -> float:
+	if _regala_centros.is_empty():
+		return -INF
+	var p := to_local(pos_global)
+	var u: float = p.z if _regala_eslora_z else p.x
+	var mejor := 0
+	var dist := INF
+	for i in _regala_centros.size():
+		var d: float = absf(_regala_centros[i] - u)
+		if d < dist:
+			dist = d
+			mejor = i
+	# En GLOBAL: los altos se muestrearon en el espacio del barco y quien pregunta trae
+	# posiciones del mundo. Devolverlo en local es comparar peras con manzanas.
+	return to_global(Vector3(0.0, _regala_altos[mejor], 0.0)).y
+
+
+## Banda apuntada y fuego. Van por `match` aparte y no dentro del de las velas para que la
+## artillería no se mezcle con la maniobra: son dos cosas distintas y se leen mejor separadas.
+## Elige a qué batería se apunta: "proa", "popa", "babor" o "estribor".
+func apuntar(que_banda: String) -> void:
+	if _canones.is_empty():
+		return
+	banda_apuntada = que_banda
+
+
+## Puntería fina de la batería apuntada, EN GRADOS: `dgiro` mueve las piezas con el espeque y
+## `delev` mete o saca la cuña. Se dan incrementos y no valores absolutos porque así sirve igual
+## al ratón (que da movimiento relativo) y a un capitán de IA corrigiendo el tiro.
+func apuntar_fino(dgiro: float, delev: float) -> void:
+	for c in canones_de(banda_apuntada):
+		c.giro_lateral = clampf(c.giro_lateral + dgiro, -15.0, 15.0)
+		c.elevacion = clampf(c.elevacion + delev, -3.0, 12.0)
+
+
+## Puntería de la batería apuntada, para el HUD: grados de espeque y de cuña, y el alcance que
+## sale de ellos. Se lee de la PRIMERA pieza; van todas a la vez.
+func punteria() -> Dictionary:
+	var piezas := canones_de(banda_apuntada)
+	if piezas.is_empty():
+		return {}
+	var p: Canon = piezas[0]
+	return {"lateral": p.giro_lateral, "elevacion": p.elevacion,
+		"alcance": p.punto_de_caida().distance_to(p.global_position),
+		"listas": piezas.filter(func(x: Canon): return x.listo()).size(),
+		"total": piezas.size()}
+
+
+## Dónde está la lámina de agua. Con `altura_mar` puesto a mano manda ese valor; si no, se
+## busca el agua en la escena por su grupo o por su nombre. Devolver 0 a ciegas haría que el
+## tiro cayese donde no es en cuanto el mar no esté en el cero.
+func _altura_del_mar() -> float:
+	if is_finite(altura_mar):
+		return altura_mar
+	var agua := get_tree().get_first_node_in_group("mar") as Node3D
+	if agua == null:
+		var raiz := get_tree().current_scene
+		if raiz != null:
+			agua = raiz.find_child("Water", true, false) as Node3D
+	if agua != null:
+		return agua.global_position.y
+	# Devolver 0 en silencio es lo que hace que una herramienta mida OTRO juego: en esta
+	# balandra el mar está en −0,882, así que un cero deja la lámina medio metro por encima de
+	# la boca y el alcance cae de 62,7 m a 41,9. Se avisa para que se ponga `altura_mar` a mano.
+	push_warning("%s: no encuentro el agua; el tiro se calculará con el mar en 0. "
+		% nombre + "Pon `altura_mar` a mano si el barco va en una escena sin mar.")
+	return 0.0
+
+
+## Le pone al barco el mando del JUGADOR: teclado y ratón traducidos a órdenes. Lo llama quien
+## sabe que este barco es el del jugador —el `GestorBarcos` al instanciarlo, o una herramienta
+## de pruebas—, nunca el barco por su cuenta: dos balandras instanciadas a mano entran las dos
+## en el grupo "barco_activo", así que ese criterio no distingue.
+func tomar_mando_jugador() -> MandoJugador:
+	var ya := get_node_or_null(^"MandoJugador") as MandoJugador
+	if ya != null:
+		return ya
+	var m := MandoJugador.new()
+	m.name = "MandoJugador"
+	add_child(m)
+	# El grupo va con el mando: el barco del jugador es el que lleva jugador. Así el mar, el
+	# HUD, la cámara y las flechas siguen encontrándolo sin rutas fijas, y ningún enemigo puede
+	# reclamar el puesto por el mero hecho de existir.
+	add_to_group("barco_activo")
+	return m
+
+
+## Quién lleva el timón, si es que alguien lo lleva. La guía de tiro lo usa para saber si debe
+## dibujarse: sin nadie al mando no hay a quien enseñársela.
+func hay_mando() -> bool:
+	return get_node_or_null(^"MandoJugador") != null

@@ -38,12 +38,28 @@ func casi(valor: float, esperado: float, tol: float, que: String) -> bool:
 		"%.3f vs %.3f ± %.3f" % [valor, esperado, tol])
 
 
-func menor_que(valor: float, tope: float, que: String) -> bool:
-	return comprobar(valor < tope, que, "%.3f < %.3f" % [valor, tope])
+## El `detalle` es opcional y se AÑADE a la comparación, no la sustituye: sigue viéndose el
+## número que falló y además lo que quieras contar de él.
+##
+## Lleva detalle porque no llevarlo era una trampa: `comprobar` y `casi` lo aceptan y estas dos
+## no, así que quien conoce el marco lo escribe por costumbre y se lleva un error de parseo
+## —"Too many arguments"— que en GDScript no es un fallo de prueba sino un fallo de COMPILACIÓN.
+## Y al no compilar un paquete, cae `pruebas.gd` entero: la batería se corta a media tirada y
+## sale con código 0, o sea en verde. Pasó dos veces el 11 de septiembre de 2026, en dos
+## sesiones distintas y sin conocerse. Cuando dos personas tropiezan igual, la firma es el
+## problema.
+func menor_que(valor: float, tope: float, que: String, detalle := "") -> bool:
+	var txt := "%.3f < %.3f" % [valor, tope]
+	if detalle != "":
+		txt += "  " + detalle
+	return comprobar(valor < tope, que, txt)
 
 
-func mayor_que(valor: float, minimo: float, que: String) -> bool:
-	return comprobar(valor > minimo, que, "%.3f > %.3f" % [valor, minimo])
+func mayor_que(valor: float, minimo: float, que: String, detalle := "") -> bool:
+	var txt := "%.3f > %.3f" % [valor, minimo]
+	if detalle != "":
+		txt += "  " + detalle
+	return comprobar(valor > minimo, que, txt)
 
 
 func resumen() -> int:

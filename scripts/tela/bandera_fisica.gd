@@ -4,10 +4,21 @@ extends TelaFisica
 ## Bandera de tela física: cuelga y vuela como cualquier paño (eso lo hace `TelaFisica`), y
 ## además se ORIENTA a sotavento girando su hueso sobre el eje del mástil.
 ##
-## **NADIE LA USA desde el 9 de septiembre de 2026, y antes de reutilizarla hay que saber por
-## qué.** La bandera de la balandra pasó a `TelaShader`. El motivo no es esta clase, es la
-## GEOMETRÍA del aparejo: su gratil va cosido a 54,8 mm del eje del mástil, que ahí tiene 46 mm
-## de radio — **nueve milímetros de holgura para un paño de 960 mm**. Al virar, el hueso lleva el
+## **EN PRUEBA otra vez desde el 10 de septiembre de 2026**: la balandra vuelve a montarla para
+## revisarla, porque el enrollado que la retiró se midió con el viento aparente todavía roto
+## (`Viento.velocidad_m_s` valía 8 contra los 9 del barco, así que en popa el aparente cambiaba
+## de signo y el hueso apenas se movía). Vuelto a medir con 16 m/s, tres pasadas: en el peor
+## frame de un viraje de 170° hay 4 puntos libres a 88-92 mm del eje del mástil, que ahí tiene
+## 46 mm de radio — o sea a DOS radios, rozando por fuera—, ninguno dentro de la madera, y el
+## vuelo se mantiene en 0,49 m. Antes eran 19 puntos, el más hondo a 4 mm, 10-11 todavía pegados
+## 5 s después y el vuelo caído a 0,28. Lo comprueba `tela_test.gd`. Si el usuario da el visto
+## bueno, hay que actualizar `CLAUDE.md`, que aún dice que la bandera es de shader.
+##
+## Lo de abajo es el razonamiento de cuando se retiró, que sigue siendo válido como historia:
+##
+## La bandera de la balandra pasó a `TelaShader` el 9 de septiembre de 2026. El motivo no era
+## esta clase, era la GEOMETRÍA del aparejo: su gratil va cosido a 54,8 mm del eje del mástil,
+## que ahí tiene 46 mm de radio — **nueve milímetros de holgura para un paño de 960 mm**. Al virar, el hueso lleva el
 ## gratil alrededor del palo, la lona libre va con retraso y termina al otro lado; una vez
 ## envuelta no sale hasta que el barco para. Medido en un viraje a sotavento: de 0 puntos a menos
 ## de 100 mm del eje se pasaba a 19, con el más hondo a 4 mm —dentro de la madera—, y 5 s

@@ -1,0 +1,7 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/tiro_a_boya.gd" id="1"]
+
+[node name="TiroABoya" type="Node"]
+script = ExtResource("1")
+carpeta = "C:/Users/ASUSTU~1/AppData/Local/Temp/claude/E--Godot-Game3D-marea-negra/9edafc07-89fd-4825-af61-041c862c1e74/scratchpad"

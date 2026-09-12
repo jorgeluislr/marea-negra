@@ -369,3 +369,141 @@ static func relieve_del_pico(arbol: SceneTree, tela: Node, segundos := 20.0) -> 
 	movs.sort()
 	var mediana: float = movs[movs.size() / 2]
 	return movs[movs.size() - 1] / maxf(mediana, 1e-6)
+
+
+## Cuántos puntos LIBRES de un paño se han metido dentro del palo del que cuelga, y a qué
+## distancia del eje llegó el más hondo. Devuelve {puntos, mas_cerca} en unidades y metros.
+##
+## Es la medida del ENROLLADO, el defecto que sacó a la bandera de la física en septiembre de
+## 2026: al virar, el hueso lleva el gratil alrededor del mástil, la lona libre va con retraso y
+## termina al otro lado del palo. Una vez envuelta no sale, porque el conflicto es TOPOLÓGICO —
+## hay tela al otro lado tirando— y ninguna fuerza lo deshace.
+##
+## Solo cuenta los puntos LIBRES: las anclas de esta bandera van cosidas a 54,8 mm del eje, o
+## sea que ellas SIEMPRE están dentro del radio de prueba y contarlas daría 11 de fondo.
+##
+## `puntos` es el PEOR frame de la ventana, no la media: el enrollado o pasa o no pasa, y
+## promediarlo con los frames buenos lo diluye hasta que no se ve.
+static func puntos_en_el_palo(arbol: SceneTree, tela: Node, hueso := "giro_bandera",
+		radio := 0.1, segundos := 1.0) -> Dictionary:
+	var d: Dictionary = tela.datos_depuracion()
+	if d.is_empty():
+		return {"puntos": 0, "mas_cerca": INF}
+	var cuerpo: SoftBody3D = d["cuerpo"]
+	var skel: Skeleton3D = d["skel"]
+	var fijo: PackedByteArray = d["fijo"]
+	var b := skel.find_bone(hueso)
+	if b < 0:
+		return {"puntos": 0, "mas_cerca": INF}
+	# El eje sale del REPOSO del hueso y no de su pose: la bandera gira ALREDEDOR de ese eje, así
+	# que la pose no lo mueve, y el reposo no depende del instante en que se lea.
+	var g := skel.global_transform * skel.get_bone_global_rest(b)
+	var o := g.origin
+	var u := g.basis.y.normalized()
+	var peor := 0
+	var cerca := INF
+	var t := 0.0
+	while t < segundos:
+		await arbol.physics_frame
+		t += 1.0 / maxf(Engine.physics_ticks_per_second, 1)
+		var n := 0
+		for i in fijo.size():
+			if fijo[i] == 1:
+				continue
+			var v: Vector3 = cuerpo.get_point_transform(i) - o
+			var dist := (v - u * v.dot(u)).length()
+			if dist < radio:
+				n += 1
+				cerca = minf(cerca, dist)
+		peor = maxi(peor, n)
+	return {"puntos": peor, "mas_cerca": cerca}
+
+
+## Cuánto se separa cada punto ANCLADO de SU nodo de anclaje: {medio, peor} en metros.
+##
+## Es la línea magenta de la vista 1 del visor, y debería ser cero: el nodo de anclaje es hijo
+## del `Skeleton3D` y viaja rígido con el barco, así que el punto clavado a él no tiene por qué
+## quedarse atrás nunca.
+##
+## **Hay que fijar los FPS para que esto discrimine.** El desfase sale de que las anclas se
+## recolocan una vez por FRAME y la física da varios pasos entre frame y frame; si el frame dura
+## lo mismo que el paso —lo que pasa en esta máquina con vsync a 120 Hz y la escena vacía— hay
+## un paso por frame y la medida da 0,0 mm con el defecto dentro.
+static func retraso_anclas(arbol: SceneTree, tela: Node, fps := 60, segundos := 1.5) -> Dictionary:
+	var d: Dictionary = tela.datos_depuracion()
+	if d.is_empty():
+		return {"medio": 0.0, "peor": 0.0}
+	var cuerpo: SoftBody3D = d["cuerpo"]
+	var anclas: Array[Node3D] = d["anclas"]
+	var fijo: PackedByteArray = d["fijo"]
+	var antes := Engine.max_fps
+	Engine.max_fps = fps
+	var suma := 0.0
+	var peor := 0.0
+	var n := 0
+	var t := 0.0
+	while t < segundos:
+		await arbol.physics_frame
+		t += 1.0 / maxf(Engine.physics_ticks_per_second, 1)
+		var s := 0.0
+		var na := 0
+		for k in fijo.size():
+			if fijo[k] == 0:
+				continue
+			var e := cuerpo.get_point_transform(k).distance_to(anclas[k].global_position)
+			s += e
+			peor = maxf(peor, e)
+			na += 1
+		if na > 0:
+			suma += s / float(na)
+			n += 1
+	Engine.max_fps = antes
+	return {"medio": suma / maxf(n, 1), "peor": peor}
+
+
+## Lo que dice el SHADER del oleaje en unos puntos del mundo, en metros.
+##
+## `modo`: 0 = altura, 1 = arrastre en x, 2 = arrastre en z, 3 = normal.y.
+##
+## Es la única forma de leer una función de shader desde código —lo que el vertex shader hace
+## con la malla del agua no se puede consultar—, y hace falta porque la altura de la mar está
+## escrita dos veces: en `oleaje.gdshaderinc` y en el autoload `Oleaje`. Si divergen, el barco
+## flota sobre olas distintas de las que se ven y nada lo avisa: ni error, ni aviso, solo un
+## casco que sube cuando el agua baja.
+##
+## El reloj se pasa a mano y NO se toma de `Oleaje.t`: entre la llamada y el render pasan dos
+## frames, y comparar la altura de dos instantes distintos daría error donde no lo hay.
+const ESPEJO_MUESTRAS := 64
+const ESPEJO_RANGO := 16.0
+
+static func oleaje_del_shader(arbol: SceneTree, puntos: PackedVector2Array,
+		modo := 0) -> PackedFloat32Array:
+	var ps := PackedVector2Array(puntos)
+	ps.resize(ESPEJO_MUESTRAS)
+	var mat := ShaderMaterial.new()
+	mat.shader = load("res://tools/espejo_oleaje.gdshader")
+	# Los coeficientes los pone el propio Oleaje: lo que se compara es la FÓRMULA, no que
+	# alguien haya copiado bien los números a mano.
+	Oleaje.aplicar(mat)
+	mat.set_shader_parameter("puntos", ps)
+	mat.set_shader_parameter("modo", modo)
+	var vp := SubViewport.new()
+	vp.size = Vector2i(ESPEJO_MUESTRAS, 1)
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	var rect := ColorRect.new()
+	rect.size = Vector2(ESPEJO_MUESTRAS, 1)
+	rect.material = mat
+	vp.add_child(rect)
+	arbol.root.add_child(vp)
+	# Dos vueltas: en la primera el render target se está creando y sale en negro.
+	await RenderingServer.frame_post_draw
+	await RenderingServer.frame_post_draw
+	var img := vp.get_texture().get_image()
+	var salida := PackedFloat32Array()
+	for i in puntos.size():
+		var c := img.get_pixel(mini(i, ESPEJO_MUESTRAS - 1), 0)
+		# 16 bits: el rojo lleva el paso grande y el verde lo divide en otros 255.
+		var v := (roundf(c.r * 255.0) + roundf(c.g * 255.0) / 255.0) / 255.0
+		salida.append((v - 0.5) * ESPEJO_RANGO)
+	vp.queue_free()
+	return salida

@@ -57,6 +57,11 @@ func _instanciar(pose: Transform3D) -> void:
 		(b as Node3D).transform = pose   # colocarlo ANTES de entrar al árbol (para base_y)
 	get_parent().add_child(b)
 	_actual = b as Node3D
+	# El barco que instancia el gestor ES el del jugador, así que aquí es donde se le pone el
+	# mando: el barco no debe decidirlo por su cuenta. El criterio "está en el grupo
+	# barco_activo" no sirve, porque dos balandras instanciadas a mano entran las dos.
+	if _actual is Barco:
+		(_actual as Barco).tomar_mando_jugador()
 
 
 func _pose_inicial() -> Transform3D:

@@ -28,8 +28,12 @@ func _correr() -> void:
 		% ("" if pide.is_empty() else " (%s)" % ", ".join(pide)))
 	if pide.is_empty() or pide.has("barco"):
 		await BarcoTest.correr(m, get_tree())
+	if pide.is_empty() or pide.has("artilleria"):
+		await ArtilleriaTest.correr(m, get_tree())
 	if pide.is_empty() or pide.has("tela"):
 		await TelaTest.correr(m, get_tree())
+	if pide.is_empty() or pide.has("ia"):
+		await IaTest.correr(m, get_tree())
 	if pide.is_empty() or pide.has("mundo"):
 		await MundoTest.correr(m, get_tree())
 	get_tree().quit(m.resumen())

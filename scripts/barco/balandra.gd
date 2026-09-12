@@ -32,6 +32,8 @@ func _ready() -> void:
 	# hay que reponerlo aquí. Sin esto el casco sale a 0,059 px/mm, un píxel cada 17 mm.
 	if acabado_madera.is_empty():
 		acabado_madera = _acabados_de_madera()
+	if artilleria.is_empty():
+		artilleria = _artilleria_de_salida()
 	super()
 
 
@@ -67,14 +69,19 @@ func _acabados_de_madera() -> Array[AcabadoMadera]:
 ## mal compuesta habrían salido ángulos arbitrarios en los tres ejes.
 ##
 ## La Y es la del CENTRO del bulto, que es donde `Carga` lo coloca, no la de su base.
+##
+## `caja_media` y `caja_babor` se corrieron a proa el 12 de septiembre de 2026 al artillar el
+## barco: estaban en Z 0,50 y 1,05, justo donde van ahora las piezas de media, y el cañón
+## quedaba montado ENCIMA de la caja. La proa quedó libre al bajar la artillería a popa, así
+## que ahí es donde ahora sobra sitio.
 func _carga_de_salida() -> Array[Carga]:
 	return [
 		_bulto(MODELO_BARRIL, Vector3(-0.760, 2.090, 4.478), -125.0, 0.768, "barril_popa_estribor"),
 		_bulto(MODELO_BARRIL, Vector3(1.050, 1.978, 3.181), -28.0, 0.768, "barril_popa_babor"),
 		_bulto(MODELO_BARRIL, Vector3(0.956, 1.986, 3.906), -168.0, 0.522, "barril_pequeno"),
 		_bulto(MODELO_CAJA, Vector3(-0.850, 1.938, -1.620), -75.0, 1.0, "caja_proa"),
-		_bulto(MODELO_CAJA, Vector3(-1.180, 1.938, 0.500), -117.0, 1.0, "caja_media"),
-		_bulto(MODELO_CAJA, Vector3(1.146, 1.938, 1.050), -52.0, 1.0, "caja_babor"),
+		_bulto(MODELO_CAJA, Vector3(-1.180, 1.938, -2.800), -117.0, 1.0, "caja_media"),
+		_bulto(MODELO_CAJA, Vector3(1.146, 1.938, -3.200), -52.0, 1.0, "caja_babor"),
 	]
 
 
@@ -86,3 +93,49 @@ func _bulto(ruta: String, pos: Vector3, giro: float, escala: float, nom: String)
 	c.escala = escala
 	c.nombre = nom
 	return c
+
+
+## Las cuatro piezas con que sale artillada, dos por banda.
+##
+## Cuatro y no seis o diez: una balandra de 12 m montaba de 4 a 6 piezas, y las que llevaban
+## ocho o más eran bastante mayores. Su ventaja era la velocidad, no la andanada. Añadir dos
+## más es añadir dos entradas aquí.
+##
+## **Las cuatro van a popa de la maestra, y eso no es una elección estética: es lo único que
+## permite el casco.** Se cruzaron dos medidas (`tools/perfil_regala.tscn` da la primera):
+##
+##   · El ánima de esta pieza queda a 2,153, y para tirar por encima de la borda necesita que
+##     la regala esté por debajo. A proa la regala sube a 2,142-2,294, así que allí el margen
+##     es de 1 cm o negativo: el tiro saldría contra su propia madera.
+##   · La mesa de guarnición y sus obenques ocupan la banda de Z −2,26 a −0,10, así que entre
+##     esos dos límites no cabe nada.
+##
+## Lo que queda con margen de sobra es Z ≈ +0,6 (+10,5 cm sobre la regala) y Z ≈ +2,5 (+7,1).
+## Que la artillería quede agrupada al centro y a popa, con la proa despejada para el foque y
+## el ancla, es además lo corriente en embarcaciones de este porte.
+##
+## En el espacio del barco, **(X, Y, Z) = (y, z, x) de Blender** — la misma conversión que la
+## carga, comprobada con los barriles: su Y de 1,978 es la cubierta (1,640) más su media altura.
+##
+##   · Y = 1,640 + 0,3575 + 0,08 = **2,0775**: media altura del cañón, más el DORMIDO sobre el
+##     que se monta. Sin él el tubo entra 2,9 cm en la regala a popa (el eje pasa limpio, pero
+##     la generatriz de abajo va 10,7 cm más baja).
+##   · X = manga_libre − 0,05 − 0,2185, para que la rueda de fuera quede 5 cm dentro del
+##     costado (el origen está a 0,2185 m de esa rueda).
+func _artilleria_de_salida() -> Array[Artilleria]:
+	# 1,640 (cubierta) + 0,3575 (media altura del cañón) + 0,08 (dormido).
+	const Y_CANON := 2.0775
+	return [
+		_pieza(Vector3(1.3215, Y_CANON, 0.6), 1.0, "canon_media_estribor"),
+		_pieza(Vector3(-1.3215, Y_CANON, 0.6), -1.0, "canon_media_babor"),
+		_pieza(Vector3(1.2015, Y_CANON, 2.5), 1.0, "canon_popa_estribor"),
+		_pieza(Vector3(-1.2015, Y_CANON, 2.5), -1.0, "canon_popa_babor"),
+	]
+
+
+func _pieza(pos: Vector3, lado: float, nom: String) -> Artilleria:
+	var a := Artilleria.new()
+	a.posicion = pos
+	a.lado = lado
+	a.nombre = nom
+	return a

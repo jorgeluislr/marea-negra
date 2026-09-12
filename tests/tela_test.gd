@@ -15,23 +15,24 @@ extends RefCounted
 
 static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 	m.paquete("tela")
-	# DOS paños físicos, no tres: la bandera pasó a tela de shader el 9 de septiembre de 2026
-	# (ver el bloque de la bandera, abajo, para el porqué medido).
+	# CUÁNTOS paños físicos hay depende de la bandera, que se ha probado de las dos formas: fue
+	# física, pasó a shader el 9 de septiembre de 2026 por el enrollado en el mástil, y está de
+	# vuelta en física para revisar si aquel defecto sigue ahí ahora que el viento aparente está
+	# arreglado. Así que aquí se exige lo que no depende de eso —el foque y la mayor— y de la
+	# bandera se comprueba, más abajo, lo que corresponda a la que esté montada.
 	var telas := UtilesPruebas.telas(arbol)
-	if not m.comprobar(telas.size() == 2, "la balandra monta sus dos velas físicas",
-			"%d" % telas.size()):
-		return
-
 	var por_nombre := {}
 	for t in telas:
 		por_nombre[str(t.get("nombre_malla"))] = t
-	# La BANDERA no está aquí: es tela de SHADER desde el 9 de septiembre de 2026 y no expone
-	# `datos_depuracion()`. Se comprueba más abajo, con lo único que de ella se puede comprobar.
-	m.comprobar(por_nombre.has("foque") and por_nombre.has("vela_mayor"),
-		"están el foque y la mayor como paños físicos", ", ".join(por_nombre.keys()))
+	if not m.comprobar(por_nombre.has("foque") and por_nombre.has("vela_mayor"),
+			"la balandra monta el foque y la mayor como paños físicos",
+			", ".join(por_nombre.keys())):
+		return
 	m.comprobar(por_nombre.get("vela_mayor") is VelaFisica, "la mayor es una VelaFisica")
-	m.comprobar(not por_nombre.has("bandera"),
-		"la bandera NO es un paño físico (no puede haber dos telas del mismo paño)")
+	# Un paño no puede estar montado dos veces: `TelaFisica` oculta la malla de autor para poner
+	# su `SoftBody` en su sitio y `TelaShader` la necesita visible, así que juntos no funcionan.
+	m.comprobar(telas.size() == por_nombre.size(),
+		"ningún paño está montado dos veces", "%d telas, %d nombres" % [telas.size(), por_nombre.size()])
 
 	# --- Soldado de costuras: sin él, glTF parte los vértices del UV y el paño se descose.
 	#
@@ -66,13 +67,28 @@ static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 	# septiembre de 2026, con ~30 aristas pasadas, y la causa era la cápsula del mástil,
 	# que se llevaba sus 11 anclajes 53 mm dentro. Ver `perchas_solidas.gd`.
 	await UtilesPruebas.estabilizar(arbol, 3.0)
-	var topes := {"foque": [0.02, 0], "vela_mayor": [0.02, 0]}
+	#
+	# **El foque tolera 1 arista y la mayor ninguna, y eso es una decisión, no un descuido.**
+	# Es el precio medido de bajar la física a 60 Hz el 10 de septiembre de 2026: el foque nace
+	# con una arista pasada y no cierra. Descartado midiendo, no lo repitas: el solver
+	# (`precision` 5, 10 y 20 dan EXACTAMENTE la misma arista) y el frame del nacimiento (con
+	# `delta_estable` a 1/60 el paño nace en 0,000-0,006 s y sigue ahí). En tamaño real es
+	# poco: fondeado, la peor arista del foque mide 19,1 % sobre 30,9 mm —5,9 mm— contra 10,4 %
+	# y 3,2 mm a 120 Hz. Tres milímetros en una arista de tres centímetros.
+	#
+	# Por eso va acompañada del tope en METROS, que es el que de verdad guarda contra un
+	# desgarro: el porcentaje engaña —una arista de reposo corta se pone al 240 % con dos
+	# centímetros y no se ve—, mientras que el desgarro del nacimiento abría 63 aristas y las
+	# dejaba abiertas para siempre. Si eso vuelve, salta el de metros aunque el de cuenta pase.
+	var topes := {"foque": [0.02, 1], "vela_mayor": [0.02, 0]}
 	for nombre in topes:
 		var e: Dictionary = await UtilesPruebas.estiramiento(arbol, por_nombre[nombre])
 		m.menor_que(e["medio"], topes[nombre][0], "'%s' no nace estirado" % nombre)
 		m.comprobar(e["malas"] <= topes[nombre][1],
 			"'%s': ninguna arista pasada de vueltas" % nombre,
-			"%d por encima del 25 %%" % e["malas"])
+			"%d por encima del 25 %%, tope %d" % [e["malas"], topes[nombre][1]])
+		m.menor_que(e["peor_m"], 0.030,
+			"'%s': ninguna arista se abre de verdad" % nombre)
 
 	# --- Y la garantía que lo evita: el paño no se monta en un frame largo. Se comprueba la
 	# condición, no el síntoma: que salga bien un día concreto depende de si el frame en que
@@ -122,31 +138,83 @@ static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 	# vertex shader y GDScript no puede leer dónde acabó cada vértice, así que no hay forma de
 	# medir el ondeo ni la costura como se hacía con el paño físico. Lo verificable es el ángulo
 	# que se le pasa. Es menos cobertura, y conviene tenerlo presente.
-	var ban := UtilesPruebas.barco(arbol).find_children("BanderaShader", "", true, false)
-	if m.comprobar(ban.size() == 1 and ban[0] is TelaShader,
-			"la bandera es tela de shader (`TelaShader`)"):
-		var bs: TelaShader = ban[0]
-		m.comprobar(str(bs.get("nombre_malla")) == "bandera", "y anima la malla 'bandera'")
-		var db: Dictionary = bs.datos_bandera()
-		if m.comprobar(not db.is_empty(), "el shader encontró la malla y la anima"):
-			# La malla de autor tiene que quedar VISIBLE: `TelaFisica` la ocultaba para poner su
-			# `SoftBody` en su lugar, y si algo la dejase oculta la bandera desaparecería sin más.
-			m.comprobar((db["malla"] as MeshInstance3D).visible, "la malla queda visible")
-			m.comprobar((db["malla"] as MeshInstance3D).material_override is ShaderMaterial,
-				"y con el material del shader de tela encima")
-			# El anclaje y el largo salen del canal verde de `Col`. Si no los encontrase, el
-			# shader cae a su reserva (largo 0,3 y dirección +X) y la bandera giraría sobre un
-			# punto que no es su driza — falla en silencio, así que se afirma el valor medido.
-			# 0,69 y no los 0,96 que decía `BanderaFisica`: son dos definiciones distintas del
-			# mismo paño. La física medía del centroide de las anclas al vértice MÁS LEJANO; el
-			# shader mide al CENTROIDE del borde libre (verde alto y rojo > 0,7), que cae más
-			# acá. Lo que importa es que no sea la reserva del shader —0,3 y dirección +X—,
-			# porque entonces la bandera giraría sobre un punto que no es su driza.
-			m.casi(float(db["largo"]), 0.69, 0.10, "y dedujo el largo de la bandera de `Col`")
+	var ban := UtilesPruebas.barco(arbol).find_children("Bandera*", "", false, false)
+	if m.comprobar(ban.size() == 1, "el barco lleva una bandera", "%d nodos" % ban.size()):
+		var bd: Node = ban[0]
+		m.comprobar(str(bd.get("nombre_malla")) == "bandera", "y anima la malla 'bandera'")
 
-		# --- Apunta a SOTAVENTO: al rolar el viento, la bandera lo sigue.
+		# --- SI ES DE SHADER: aquí se comprueba la ORDEN, no el resultado. El desplazamiento del
+		# paño ocurre en el vertex shader y GDScript no puede leer dónde acabó cada vértice, así
+		# que no hay forma de medir el ondeo ni la costura como se hace con el paño físico. Lo
+		# verificable es el ángulo que se le pasa. Es menos cobertura, y conviene tenerlo presente.
+		if bd is TelaShader:
+			var db: Dictionary = (bd as TelaShader).datos_bandera()
+			if m.comprobar(not db.is_empty(), "el shader encontró la malla y la anima"):
+				# La malla de autor tiene que quedar VISIBLE: `TelaFisica` la ocultaba para poner su
+				# `SoftBody` en su lugar, y si algo la dejase oculta la bandera desaparecería sin más.
+				m.comprobar((db["malla"] as MeshInstance3D).visible, "la malla queda visible")
+				m.comprobar((db["malla"] as MeshInstance3D).material_override is ShaderMaterial,
+					"y con el material del shader de tela encima")
+				# El anclaje y el largo salen del canal verde de `Col`. Si no los encontrase, el
+				# shader cae a su reserva (largo 0,3 y dirección +X) y la bandera giraría sobre un
+				# punto que no es su driza — falla en silencio, así que se afirma el valor medido.
+				# 0,69 y no los 0,96 que decía `BanderaFisica`: son dos definiciones distintas del
+				# mismo paño. La física medía del centroide de las anclas al vértice MÁS LEJANO; el
+				# shader mide al CENTROIDE del borde libre (verde alto y rojo > 0,7), que cae más acá.
+				m.casi(float(db["largo"]), 0.69, 0.10, "y dedujo el largo de la bandera de `Col`")
+
+		# --- SI ES FÍSICA: lo que hay que comprobar es que NO SE ENROLLA en el mástil, que es lo
+		# que la sacó de la física en septiembre de 2026. Su gratil va cosido a 54,8 mm del eje del
+		# palo, que ahí tiene 46 mm de radio: nueve milímetros de holgura para un paño de 960 mm.
+		# Al virar, el hueso lleva el gratil alrededor del palo, la lona libre va con retraso y
+		# acaba al otro lado; una vez envuelta no sale hasta parar el barco, porque el conflicto es
+		# TOPOLÓGICO y ninguna fuerza lo deshace (una restricción dura que sacaba 7-9 puntos por
+		# paso la deshacía el solver). Medido entonces: de 0 puntos libres a menos de 100 mm del eje
+		# se pasaba a 19, el más hondo a 4 mm —dentro de la madera—, y 5 s después seguían 10-11.
+		#
+		# **Se vuelve a medir porque aquella cifra es de antes de arreglar el viento aparente**, y
+		# las dos investigaciones se solaparon. `Viento.velocidad_m_s` valía 8 con la balandra a 9,
+		# así que en popa el aparente cambiaba de signo y `orientar()` perseguía un objetivo que
+		# saltaba 180°: el hueso apenas se movía. Con eso dentro, el hueso no llegaba a barrer el
+		# gratil alrededor del palo de la forma que produce el enrollado, ni a no hacerlo — la
+		# medida no discriminaba. Si esto sale en 0, la bandera física vuelve a ser una opción.
+		#
+		# El viraje es de 170° y no de 90° a propósito: `virar()` no dice hacia qué banda gira, y
+		# un arco de 170° pasa por la popa venga de donde venga el viento. Un viraje corto podría
+		# no llegar a cruzar el paño de lado, que es cuando el enrollado ocurre.
+		if bd is BanderaFisica:
+			# Se mide la PENETRACIÓN, no la cercanía. El mástil tiene 46 mm de radio en la sección
+			# de la bandera —lo imprime `perchas_solidas` al arrancar— y la relinga va cosida a
+			# 54,8 mm del eje, así que los puntos libres pegados a ella rondan esa cifra SIEMPRE,
+			# viren o no: con un cedazo de 100 mm salía 1 punto a 99 mm con el barco navegando en
+			# línea recta. El cedazo de 100 mm sigue ahí porque es con el que se contaron los 19
+			# puntos de septiembre y hace comparables las cifras, pero lo que falla es meterse en la
+			# madera. Y el enrollado no era rozar: era llegar a 4 mm del eje y QUEDARSE.
+			await UtilesPruebas.navegar(arbol, 6.0, Vector3(1, 0, 0))
+			var antes: Dictionary = await UtilesPruebas.puntos_en_el_palo(arbol, bd)
+			m.comprobar(float(antes["mas_cerca"]) > 0.046,
+				"la bandera vuela por fuera del palo antes de virar", _dentro(antes))
+			var giro: float = await UtilesPruebas.virar(arbol, 170.0, 30.0)
+			if m.mayor_que(giro, 150.0, "el barco vira lo bastante para medir el enrollado"):
+				var justo: Dictionary = await UtilesPruebas.puntos_en_el_palo(arbol, bd)
+				m.comprobar(float(justo["mas_cerca"]) > 0.046,
+					"y no se mete en el mástil al virar", _dentro(justo))
+				# Y 5 s después sigue volando LARGA. Es la mitad que importa: una bandera enrollada se
+				# ACORTA —el paño se queda pegado al palo— y eso el ángulo no lo ve, que un trapo
+				# flojo puede estar perfectamente apuntado. De través vuela 0,59 m de sus 0,96, y en
+				# popa 0,42 con `empuje_viento` a 35; enrollada se quedaba en 0,28 hasta fondear.
+				await UtilesPruebas.navegar(arbol, 5.0, Vector3(1, 0, 0))
+				var luego: Dictionary = await UtilesPruebas.puntos_en_el_palo(arbol, bd)
+				m.comprobar(float(luego["mas_cerca"]) > 0.046,
+					"ni se queda metida en él 5 s después", _dentro(luego))
+				var vuelo: float = await UtilesPruebas.largo_del_vuelo(arbol, bd, 2.0)
+				m.mayor_que(vuelo, 0.35, "y sigue volando larga, no pegada al palo")
+
+		# --- Apunta a SOTAVENTO: al rolar el viento, la bandera lo sigue. Vale para las dos, que
+		# `direccion_de_vuelo()` lo tienen las dos y significa lo mismo: hacia dónde apunta la
+		# DRIZA, no el paño. Medir el paño no sirve — vuela al aparente aunque el hueso apunte mal.
 		await UtilesPruebas.estabilizar(arbol, 2.5, Vector3(1, 0, 0))
-		var d1: Vector3 = bs.direccion_de_vuelo()
+		var d1: Vector3 = bd.direccion_de_vuelo()
 		# OJO: con el barco PARADO esta comprobación es casi tautológica —`direccion_de_vuelo()`
 		# gira la dirección de reposo por el mismo ángulo que se calculó para apuntar al viento,
 		# así que da 0,0° por construcción—. Vale para cazar un eje o un signo equivocados, no
@@ -155,14 +223,17 @@ static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 		m.menor_que(rad_to_deg(acos(clampf(d1.dot(Vector3(1, 0, 0)), -1.0, 1.0))), 20.0,
 			"la bandera apunta a sotavento")
 		await UtilesPruebas.estabilizar(arbol, 2.5, Vector3(-1, 0, 0))
-		var d2: Vector3 = bs.direccion_de_vuelo()
+		var d2: Vector3 = bd.direccion_de_vuelo()
 		m.mayor_que(rad_to_deg(acos(clampf(d1.dot(d2), -1.0, 1.0))), 120.0,
 			"y da la vuelta cuando el viento rola 180°")
 
 		# --- Y NAVEGANDO va al viento APARENTE, no al real. Con el barco a 9 m/s y el viento de
 		# través hay hasta 50° entre uno y otro; con el real, la driza apunta a un sitio y la
 		# tela vuela a otro. `Viento.velocidad_m_s` tiene que superar la máxima del barco o el
-		# aparente cambia de signo en popa — esa es la prueba de abajo.
+		# aparente cambia de signo en popa — esa es la prueba de abajo, y es el fallo que se veía
+		# como "la bandera no rola": con 8 m/s contra los 9 del barco, y las ráfagas moviendo
+		# `fuerza * 8` entre 4,4 y 11,6, el objetivo saltaba 180° varias veces por segundo y el
+		# hueso se quedaba temblando cerca del reposo mientras el paño volaba bien.
 		var b3 := UtilesPruebas.barco(arbol) as CharacterBody3D
 		m.mayor_que(Viento.velocidad_m_s, b3.velocidad_max,
 			"el viento sopla más rápido de lo que puede correr el barco")
@@ -170,7 +241,7 @@ static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 		if m.mayor_que(vel, 3.0, "el barco navega para poder medir el viento aparente"):
 			var ap := Viento.aparente(b3.velocity)
 			ap.y = 0.0
-			var d3: Vector3 = bs.direccion_de_vuelo()
+			var d3: Vector3 = bd.direccion_de_vuelo()
 			m.menor_que(rad_to_deg(acos(clampf(d3.dot(ap.normalized()), -1.0, 1.0))), 20.0,
 				"la bandera apunta al viento aparente, no al real")
 
@@ -196,20 +267,40 @@ static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 	m.comprobar(cruces == 0, "ningún área de viento gobierna el paño de otra", "%d cruces" % cruces)
 
 	# --- NAVEGANDO, la costura entre lo anclado y lo libre no se abre. Es la medida que faltaba:
-	# todo lo demás se comprobaba con el barco ANCLADO, y este defecto solo sale con el barco en
-	# marcha. El paño libre va exactamente UN PASO DE FÍSICA por detrás de sus anclas, que van
-	# clavadas al esqueleto: a 8,7 m/s eso son 145 mm por paso.
+	# todo lo demás se comprobaba con el barco ANCLADO, y este defecto solo salía con el barco en
+	# marcha.
 	#
-	# No depende de NADA del solver (rigidez 0,3-0,95, precisión 10-30, masa 0,6-0,1, arrastre
-	# 0,3-0,05 dieron todos lo mismo) ni del viento (sin viento se abre MÁS): depende solo del
-	# tamaño del paso. Medido en la bandera cuando era física: 60 Hz → 108 mm, 120 Hz → 51,
-	# 240 Hz → 13. El proyecto va a 120 por esto.
+	# **Su causa estuvo mal entendida hasta el 10 de septiembre de 2026.** Se creía que el paño
+	# libre iba un paso de física por detrás de sus anclas y que solo dependía del tamaño del
+	# paso, porque al barrer la frecuencia salía 60 Hz -> 108 mm, 120 -> 51, 240 -> 13; y el
+	# proyecto se puso a 120 Hz por eso. Pero lo que se estaba barriendo no era el paso: era
+	# cuántos pasos caben en un frame. Quien se quedaba atrás no era el paño libre, eran los
+	# puntos ANCLADOS, porque `SoftBody3D` solo los lleva a donde dice su nodo una vez por frame
+	# de render. Empujándolos al servidor en cada paso (`TelaFisica._colocar_anclas`), la costura
+	# de la mayor cae de 0,028 m a 0,002 y deja de depender de los fps.
 	#
-	# Se mide en la MAYOR, que es la que sigue siendo física. Era un defecto conocido de ella
-	# desde septiembre —"el paño va un paso de física por detrás del barco"— y no tenía prueba.
+	# El tope baja de 0,075 a 0,010 a la vez que el arreglo: con 0,075 sobre 0,002 medidos ya no
+	# guardaba nada. Sigue habiendo 5 veces de margen.
 	await UtilesPruebas.navegar(arbol, 6.0, Vector3(1, 0, 0))
 	var cos_may: Dictionary = await UtilesPruebas.costura(arbol, por_nombre["vela_mayor"], 1.5)
-	m.menor_que(cos_may["medio"], 0.075, "la costura de la mayor aguanta navegando")
+	m.menor_que(cos_may["medio"], 0.010, "la costura de la mayor aguanta navegando")
+
+	# --- Los ANCLAJES no se retrasan del barco. Un punto anclado está clavado a un `Node3D`
+	# hijo del `Skeleton3D`, que viaja rígido con el casco: su separación tiene que ser cero
+	# navegando igual que fondeado. Se veía en el visor como la columna de anclajes de la bandera
+	# estirándose hacia popa en cuanto el barco arrancaba, y volviendo a su sitio al parar.
+	#
+	# **Con los FPS fijos, o no discrimina**: el desfase sale de que las anclas se recolocan una
+	# vez por FRAME mientras la física da varios pasos entre frame y frame, así que si el frame
+	# dura lo mismo que el paso —vsync a 120 Hz con la física a 120— hay un paso por frame y sale
+	# 0,0 mm con el defecto dentro. Medido en `tools/retraso_anclas.tscn`, a 8,74 m/s: 30 fps da
+	# 218 mm de peor, 60 fps da 73, sin tope da 0. Y peor = (pasos por frame - 1) x paso x
+	# velocidad, clavado a tres cifras, que es lo que identifica la causa.
+	await UtilesPruebas.navegar(arbol, 6.0, Vector3(1, 0, 0))
+	for nombre in por_nombre:
+		var ret: Dictionary = await UtilesPruebas.retraso_anclas(arbol, por_nombre[nombre], 60)
+		m.menor_que(ret["peor"], 0.010,
+			"los anclajes de '%s' no se quedan atrás navegando" % nombre)
 
 	# --- La mayor DESVENTADA flamea, no da un latido. En fachada la lona pegaba un chasquido
 	# entero cada ~6,4 s —medio ciclo del bamboleo de dirección del viento, justo donde la percha
@@ -222,5 +313,27 @@ static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 	var b4 := UtilesPruebas.barco(arbol) as CharacterBody3D
 	await UtilesPruebas.navegar(arbol, 6.0, b4.global_transform.basis.z)
 	if m.menor_que(b4.factor_viento(), 0.05, "el barco está en fachada para medir el flameo"):
+		# **INTERMITENTE, y sin resolver (10 de septiembre de 2026).** A 120 Hz esta medida sale
+		# BIMODAL —1,76 / 1,88 contra 2,61 / 2,62— con el tope en 2,50, así que la suite se pone
+		# roja una de cada tres veces. No es ruido: son dos valores separados, no una nube.
+		#
+		# Lo que se sabe: a 60 Hz NO pasa (1,93 / 1,86 / 1,96 en tres pasadas seguidas). Y subir
+		# la ventana de 12 a 20 s no ayuda —sale 2,615—, lo cual tiene sentido y contradice la
+		# regla general de la cabecera de este fichero: esta cifra es un MÁXIMO partido por una
+		# mediana, y alargar la ventana solo puede subir el máximo. Para robustecerla habría que
+		# cambiar el máximo por un percentil alto, no ampliar la ventana.
+		#
+		# Lo que NO se sabe: si es de hoy. Apareció trabajando en el empuje de anclajes por paso,
+		# que quita el tirón por frame y por tanto baja el movimiento de FONDO del paño — con la
+		# mediana más baja, el mismo pico destaca más—, pero no se ha medido contra el estado
+		# anterior. No tocar el tope para taparlo.
 		var relieve := await UtilesPruebas.relieve_del_pico(arbol, mayor, 12.0)
 		m.menor_que(relieve, 2.5, "la mayor desventada flamea en vez de dar un latido")
+
+
+## Detalle legible de una medida de `puntos_en_el_palo()`, para el informe de la prueba.
+static func _dentro(d: Dictionary) -> String:
+	var n := int(d["puntos"])
+	if n == 0:
+		return "0 puntos dentro"
+	return "%d puntos dentro, el más hondo a %.0f mm del eje" % [n, float(d["mas_cerca"]) * 1000.0]

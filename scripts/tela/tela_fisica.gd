@@ -87,7 +87,15 @@ extends Node3D
 ## mayor pasa de 0 a 63 aristas estiradas por encima del 25 %, y ahí se queda. Por eso un barco
 ## reinstanciado con TAB, que nace con el juego ya rodando, sale limpio y el del arranque no.
 @export var delta_estable := 1.0 / 30.0   ## Frame que se considera "normal", en segundos.
-@export_range(1, 30) var frames_estables := 3
+## Frames normales SEGUIDOS que hay que ver antes de montar el paño.
+##
+## **Que sean pocos importa: el paño sale PEOR cuanto más tarde nace, no mejor.** Subirlos a 30
+## —media docena de frames después del último tirón del arranque, que es donde parecía que había
+## que nacer— llevó al foque de 1-2 aristas por encima del 25 % a 3, y repetible en tres
+## tiradas. **Por qué, no se sabe**: el aparejo no es (no mueve nada mientras no haya cuerpo,
+## porque `_antes_de_pose` cuelga de `_physics_process`, que sale antes). Queda apuntado como
+## medida, no como explicación; quien lo retome, que no repita la subida.
+@export_range(1, 120) var frames_estables := 3
 @export var espera_max := 5.0             ## Tope: si el juego va lento de verdad, se monta igual.
 
 @export_group("Perchas")
@@ -95,6 +103,9 @@ extends Node3D
 ## botavara y el pico y sale una sierra de picos por debajo de ellos.
 @export_flags_3d_physics var capa_perchas := 16
 @export_group("")
+
+## Frame en que nació el último paño, compartido por todos: ver `_esperar_reloj()`.
+static var _frame_del_ultimo_parto := -1
 
 var _skel: Skeleton3D
 var _cuerpo: SoftBody3D
@@ -371,13 +382,34 @@ func _soltar() -> void:
 	_recogiendo = false
 
 
+## Solo el arranque: decidir CUÁNDO nace el paño se mide en frames de render, porque lo que hay
+## que esquivar es el tirón de cargar el modelo y compilar shaders. Todo lo demás va en la
+## física; ver `_physics_process`.
 func _process(delta: float) -> void:
 	if _cuerpo == null:
 		_esperar_reloj(delta)
+
+
+## En el reloj de la FÍSICA, y no en el de render, porque las anclas son el objetivo de un pin
+## que el solver persigue en CADA paso.
+##
+## Colocándolas en `_process` se quedaban quietas en el mundo entre frame y frame mientras el
+## barco seguía navegando, así que el punto clavado se retrasaba hasta (pasos por frame - 1)
+## pasos. Medido con `tools/retraso_anclas.tscn` a 8,74 m/s: a 30 fps con la física a 120, 218 mm
+## de peor separación; a 60 fps, 73; sin tope de fps —un paso por frame— 0,0. Y la fórmula
+## (pasos por frame - 1) x paso x velocidad clava las tres a tres cifras, que es lo que señala la
+## causa: no era el solver, era el reloj. Se veía en el visor como la columna de anclajes de la
+## bandera estirándose hacia popa al arrancar el barco y recomponiéndose al parar.
+##
+## Es también lo que rompía el paño al nacer: en un frame de 0,12 s la física da ~7 pasos, y con
+## las anclas congeladas los siete la tela se descolgaba de la percha y el solver ya no cerraba
+## esas aristas.
+func _physics_process(delta: float) -> void:
+	if _cuerpo == null:
 		return
 	# El orden importa y es el mismo que tenían los nodos sueltos en la escena: primero se
 	# mueven los huesos propios del paño (la bandera rola), después se lee la pose resultante,
-	# y solo entonces se llevan las anclas. Al revés, las anclas irían un frame por detrás.
+	# y solo entonces se llevan las anclas. Al revés, las anclas irían un paso por detrás.
 	_antes_de_pose(delta)
 	# Una matriz por hueso, no una por vértice: pose global por reposo global inverso.
 	var n := _skel.get_bone_count()
@@ -387,7 +419,7 @@ func _process(delta: float) -> void:
 		mats[i] = _skel.get_bone_global_pose(i) * _skel.get_bone_global_rest(i).affine_inverse()
 	_tras_pose(delta, mats)
 	_colocar_anclas(mats)
-	_actualizar_viento()
+	_actualizar_viento(delta)
 
 
 ## Cuenta frames normales seguidos y monta el paño cuando hay bastantes. Se mide el frame de
@@ -395,9 +427,22 @@ func _process(delta: float) -> void:
 func _esperar_reloj(delta: float) -> void:
 	_t_espera += delta
 	_estables = _estables + 1 if delta <= delta_estable else 0
-	if _estables >= frames_estables or _t_espera >= espera_max:
-		_delta_montaje = delta
-		_montar()
+	if _estables < frames_estables and _t_espera < espera_max:
+		return
+	# Un paño por frame, nunca dos. Montar un `SoftBody3D` cuesta, y los tres de la balandra
+	# salían a la vez en el frame 5 del arranque: entre los tres lo dejaban en 74,7 ms contra los
+	# 33 que se consideran normales, así que el paño que nace se come el tirón que él mismo ayuda
+	# a provocar. Medido con `tools/tirones_del_arranque.tscn`: escalonados, ese frame vuelve a
+	# ser normal y cada paño nace en el suyo.
+	#
+	# Lo que esto **no** arregla es la arista suelta del foque: esa es intermitente y viene de
+	# antes (ver la nota del foque en CLAUDE.md).
+	var ahora := Engine.get_process_frames()
+	if _frame_del_ultimo_parto == ahora:
+		return
+	_frame_del_ultimo_parto = ahora
+	_delta_montaje = delta
+	_montar()
 
 
 ## Gancho previo a leer la pose del esqueleto: para el paño que MUEVE huesos (la bandera).
@@ -419,6 +464,9 @@ func _fraccion_recogida() -> float:
 func _colocar_anclas(mats: Array[Transform3D]) -> void:
 	var n := mats.size()
 	var s := _fraccion_recogida()
+	# Espacio del esqueleto -> mundo. Se calcula una vez y no se pide `global_position` a cada
+	# nodo de anclaje: son 831 nodos en la balandra y cada consulta fuerza su propia cadena.
+	var mundo := _skel.global_transform
 	for k in _anclas.size():
 		# Los sueltos, mientras nadie los ha agarrado, no hay que tocarlos.
 		if _fijo[k] == 0 and not _recogiendo:
@@ -436,7 +484,24 @@ func _colocar_anclas(mats: Array[Transform3D]) -> void:
 			total += w
 		if total <= 0.0:
 			destino = _reposo[k]
-		_anclas[k].position = destino if _fijo[k] == 1 else _agarre[k].lerp(destino, s)
+		var sitio := destino if _fijo[k] == 1 else _agarre[k].lerp(destino, s)
+		_anclas[k].position = sitio
+		# Y se EMPUJA el punto al servidor, además de mover su nodo de anclaje.
+		#
+		# `SoftBody3D` solo lleva sus puntos clavados a donde dice su nodo UNA VEZ POR FRAME DE
+		# RENDER, no en cada paso de física. Con la física a 120 Hz y 30 fps son cuatro pasos por
+		# frame: en tres de ellos el punto se queda quieto en el mundo mientras el barco sigue
+		# navegando, y la costura se abre hasta 218 mm a 8,74 m/s antes de recomponerse de golpe.
+		# Es lo que se ve como la columna de anclajes estirándose hacia popa al arrancar el barco
+		# y volviendo a su sitio al parar. Medido paso a paso con `tools/reloj_del_pano.tscn`: el
+		# barco cambia de sitio en los 8 pasos, el nodo de anclaje también, y el punto solo 2
+		# veces — y el servidor de física da la misma cifra que el nodo, así que no es que se lea
+		# tarde, es que no se mueve.
+		#
+		# El nodo se sigue colocando porque es lo que el propio `SoftBody3D` lee en su
+		# refresco de frame; esto solo adelanta el trabajo a cada paso.
+		if _rid.is_valid():
+			PhysicsServer3D.soft_body_move_point(_rid, k, mundo * sitio)
 
 
 ## Un bit de capa para este paño, para que su área de viento no gobierne a los demás.
@@ -446,7 +511,7 @@ static func _bit_viento() -> int:
 	return bit
 
 
-func _actualizar_viento() -> void:
+func _actualizar_viento(delta: float) -> void:
 	if _area == null:
 		return
 	# El campo del área va con el viento REAL, no con el aparente: el paño encuentra el aparente
@@ -465,7 +530,7 @@ func _actualizar_viento() -> void:
 		var eje := v.normalized().cross(Vector3.UP)
 		if eje.length() < 0.01:
 			eje = Vector3.RIGHT
-		_fase_flameo += get_process_delta_time() * TAU * flameo_frecuencia * maxf(Viento.fuerza, 0.1)
+		_fase_flameo += delta * TAU * flameo_frecuencia * maxf(Viento.fuerza, 0.1)
 		var onda := sin(_fase_flameo) + 0.4 * sin(_fase_flameo * 2.3 + 1.0)
 		v += eje.normalized() * (v.length() * fla * onda)
 	var g := v + Vector3.DOWN * peso_propio

@@ -25,7 +25,8 @@ marea_negra/
 │   ├── textures/     # Texturas
 │   └── audio/        # Música y efectos de sonido
 ├── blender_src/      # Scripts de pipeline y marcado de partes
-└── fuentes/          # Todo lo anterior al juego: .blend, crudos de Meshy, prompts
+├── fuentes/          # Todo lo anterior al juego: .blend, crudos de Meshy, prompts
+└── sincronizar_drive.ps1   # Copia los pesados a Google Drive (ver más abajo)
 ```
 
 Los scripts se cuelgan de las escenas (no van junto al `.tscn`), y **la funcionalidad propia de
@@ -84,16 +85,59 @@ pasa antes `godot --path . --headless --import`.
    pero lo necesitas para futuras ediciones). Estos archivos pueden pesar mucho — considera
    usar Git LFS si el repo crece.
 
+## Los pesados van a Drive, no al repositorio
+
+El repositorio lleva el código, las escenas y los `.import` con sus `uid://`. Los binarios se
+quedan fuera por `.gitignore` — los `.glb` de 40-62 MB, sus texturas, el audio sin comprimir — y
+con ellos `fuentes/` entera, que son 24 GB. Todo eso vive en **Google Drive, en la carpeta
+`marea_negra` de *My Drive***, que Drive para escritorio monta en streaming como `G:`.
+
+`sincronizar_drive.ps1` hace la copia con `robocopy`. **Simula por defecto**, así que puedes
+lanzarlo sin miedo y leer el resumen antes de mover nada:
+
+```powershell
+.\sincronizar_drive.ps1              # dice qué copiaría, sin tocar el disco
+.\sincronizar_drive.ps1 -Ejecutar    # copia de verdad
+```
+
+Son **5,93 GB en 793 ficheros**: los `.blend` de trabajo, `fuentes/blend/tex`, la biblioteca de
+piezas en glTF, `crudo/`, `retopo/`, `assets/` y el proyecto de Godot. Deja fuera 18,4 GB que
+son respaldo de recuperación ante fallo y no hacen falta en la nube:
+
+| Excluido | Tamaño | Por qué |
+|---|---|---|
+| `respaldos/` (a cualquier nivel) | 11,2 GB | instantáneas de sesión |
+| `*.bak`, `balandra_piezas_recuperado.blend`, `_rec2.blend` | 6,3 GB | rescates de un `.blend` truncado |
+| `*.blend1` | 1,0 GB | respaldos automáticos de Blender |
+| `.git`, `.godot`, `licencias/` | — | el repo, la caché, y datos personales |
+
+Cuatro cosas que conviene no olvidar:
+
+- **No trabajes dentro de la carpeta sincronizada.** `E:` sigue siendo el sitio de trabajo y la
+  copia se lanza cuando hay algo terminado. Blender reescribe el `.blend` completo en cada
+  guardado, y `balandra_alta.blend` son 1,2 GB: sincronizado en vivo, resubiría el gigabyte
+  entero cada vez.
+- **`licencias/` nunca sube.** Son datos personales y la carpeta de Drive está compartida.
+- **Drive no conserva los flujos NTFS `Zone.Identifier`** de `fuentes/crudo/`, que son la
+  evidencia de procedencia con el UUID de Meshy. Los salva
+  `fuentes/crudo/_zone_identifier_respaldo.txt`, que sí se sube — mantenlo al día al añadir
+  crudos nuevos.
+- **La caché de Drive vive en `E:\DriveFS_cache`**, no en `C:`, porque el disco del sistema
+  anda por debajo de 3 GB libres y la caché es por donde pasa todo lo que se sube.
+
+El historial de git no va a Drive: el repositorio está en GitHub
+(`jorgeluislr/marea-negra`). Un `.git` dentro de una carpeta sincronizada se corrompe, porque
+Drive sube fichero a fichero sin transacción y el `index` o las refs acaban a medias.
+
 ## Próximos pasos sugeridos
 
 - Reemplazar la cápsula del jugador por un modelo con animaciones (idle, correr, trepar,
   espada) usando un `AnimationTree`.
-- Mar de verdad: hoy el plano de agua tiene 4 vértices y el oleaje del shader no se ve, y el
-  barco se balancea con un `sin()` propio que no tiene relación con el agua. El plan es olas de
-  Gerstner con la misma función en el shader y en GDScript, para que el barco flote sobre las
-  olas que se ven (y cabecee y escore, no solo suba y baje).
-- Combate: espada cuerpo a cuerpo a pie, cañones en el barco (raycast o proyectiles físicos),
-  daño al casco y al velamen.
+- Mar de verdad, fase 2: el mar ya tiene olas de Gerstner, disco con faldón hasta 20 km y
+  curvatura del horizonte (autoload `Oleaje` + `oleaje.gdshaderinc`,
+  la misma función en el shader y en GDScript), pero el barco sigue balanceándose con un `sin()`
+  propio a altura fija. Falta que pregunte la altura en cuatro puntos del casco y saque de ahí
+  altura, cabeceo y escora.
 - Combate: espada cuerpo a cuerpo a pie, cañones en el barco (raycast o proyectiles físicos),
   daño al casco y al velamen.
 - Mundo: varias islas, sistema de viaje en el mar abierto, puertos donde comprar/vender y

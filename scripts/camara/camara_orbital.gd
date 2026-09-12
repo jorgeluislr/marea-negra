@@ -36,8 +36,16 @@ var _arrastrando := false
 var _objetivo: Node3D
 
 
+## Hasta dónde se ve, en metros. El valor de fábrica de Godot son 4.000 y el agua llega a
+## 20.000: con 4.000 el mar se acaba en un canto a cuatro kilómetros, que es justo lo que se
+## quería quitar. 25.000 cubre el horizonte de un ojo a 49 m sobre el agua. No cuesta precisión
+## de profundidad porque Godot invierte el buffer de Z (Forward+).
+const ALCANCE := 25000.0
+
+
 func _ready() -> void:
-	current = true
+	far = ALCANCE
+	_reclamar_visor.call_deferred()
 	_objetivo = get_node_or_null(objetivo_path) as Node3D
 	if _objetivo == null:
 		_objetivo = get_parent_node_3d()
@@ -93,6 +101,30 @@ func _subir_pivote() -> void:
 	_pivote_local.y = (bajo + alto) * 0.5
 	print("camara_orbital: barco de %.2f m de alto (%.2f a %.2f), pivote a %.2f"
 		% [alto - bajo, bajo, alto, _pivote_local.y])
+
+
+## Solo se queda el visor si SU barco es el del jugador, y ademas deja de escuchar el raton.
+##
+## Antes hacia `current = true` a secas, y con un segundo barco en el agua eso se veia como que
+## la camara sale encima del barco que no gobiernas: el enemigo se instancia despues, su camara
+## entra al arbol la ultima y gana. Con un solo barco no se notaba.
+##
+## **Diferido a proposito.** Quien lleva al jugador lo decide `Barco.tomar_mando_jugador()`, y el
+## `GestorBarcos` lo llama DESPUES de meter el barco en el arbol, o sea despues de este `_ready`
+## —los hijos se preparan antes que el padre—. Preguntando aqui mismo no lo reclamaria nadie y la
+## pantalla saldria en negro.
+##
+## Sin ningun barco marcado (una herramienta de medida, una escena suelta) se lo queda igual: es
+## la misma regla del audio del barco, y evita dejar sin camara una escena de prueba.
+func _reclamar_visor() -> void:
+	var hay_jugador := not get_tree().get_nodes_in_group("barco_activo").is_empty()
+	if hay_jugador and _objetivo != null and not _objetivo.is_in_group("barco_activo"):
+		current = false
+		# Y que no se coma el clic derecho ni la rueda: dos camaras orbitando a la vez con el
+		# mismo raton es un giro que no corresponde a lo que se ve.
+		set_process_unhandled_input(false)
+		return
+	current = true
 
 
 func _unhandled_input(event: InputEvent) -> void:

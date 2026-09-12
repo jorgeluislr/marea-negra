@@ -1,0 +1,118 @@
+[gd_scene format=4 uid="uid://cndeayiv7rofd"]
+[ext_resource type="Script" path="res://scripts/mundo/campo_tiro.gd" id="campo_tiro"]
+
+
+[ext_resource type="PackedScene" uid="uid://dojnybxkkrp6a" path="res://scenes/barcos/lancha.tscn" id="2"]
+[ext_resource type="Shader" uid="uid://40jws2ckdt3l" path="res://assets/shaders/agua.gdshader" id="3"]
+[ext_resource type="Script" uid="uid://dd00j2dty6qsh" path="res://scripts/mundo/mar.gd" id="4"]
+[ext_resource type="Script" uid="uid://ctbpgn11abio4" path="res://scripts/mundo/viento_flechas.gd" id="5"]
+[ext_resource type="Script" uid="uid://b4tah4ag65pmh" path="res://scripts/mundo/hud_barco.gd" id="6"]
+[ext_resource type="PackedScene" uid="uid://ddwrqkpl3gto3" path="res://scenes/barcos/barca.tscn" id="7"]
+[ext_resource type="Script" uid="uid://dfv0b77iwqd5v" path="res://scripts/mundo/gestor_barcos.gd" id="8"]
+[ext_resource type="Script" uid="uid://dvx4ajo7c0428" path="res://scripts/mundo/musica.gd" id="9"]
+[ext_resource type="Shader" uid="uid://dxr7ofkgsbqiu" path="res://assets/shaders/cielo.gdshader" id="10"]
+[ext_resource type="Texture2D" uid="uid://b0vau5yt18g1q" path="res://assets/textures/cielo.webp" id="11"]
+[ext_resource type="PackedScene" uid="uid://bktul65h1jnmi" path="res://scenes/barcos/goleta.tscn" id="12"]
+[ext_resource type="PackedScene" path="res://scenes/barcos/balandra.tscn" id="13"]
+[ext_resource type="AudioStream" path="res://assets/audio/ambiente_puerto.wav" id="14"]
+
+[sub_resource type="ShaderMaterial" id="CieloMat"]
+shader = ExtResource("10")
+shader_parameter/panorama = ExtResource("11")
+shader_parameter/color_mar = Color(0.04, 0.16, 0.24, 1)
+shader_parameter/suavizado = 0.06
+
+[sub_resource type="Sky" id="Sky_1"]
+sky_material = SubResource("CieloMat")
+
+[sub_resource type="Environment" id="Environment_1"]
+background_mode = 2
+sky = SubResource("Sky_1")
+ambient_light_source = 3
+ssr_enabled = true
+ssr_max_steps = 32
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_water"]
+render_priority = 0
+shader = ExtResource("3")
+shader_parameter/color_agua = Color(0.04, 0.16, 0.24, 1)
+shader_parameter/rugosidad = 0.05
+shader_parameter/especular = 0.5
+shader_parameter/metalico = 0.0
+shader_parameter/estela = PackedVector4Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+shader_parameter/vida_estela = 3.0
+shader_parameter/vel_expansion = 1.6
+shader_parameter/amplitud_estela = 0.08
+shader_parameter/espuma_intensidad = 0.15
+shader_parameter/ola_amplitud = 0.03
+shader_parameter/ola_escala = 0.8
+shader_parameter/ola_velocidad = 0.6
+shader_parameter/recorte_activo = false
+shader_parameter/barco_pos = Vector2(0, 0)
+shader_parameter/barco_dir = Vector2(0, 1)
+shader_parameter/barco_radio = Vector2(1.1, 2.2)
+shader_parameter/recorte_proa_exp = 0.8
+shader_parameter/recorte_popa_exp = 0.4
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_water"]
+size = Vector2(500, 500)
+
+[sub_resource type="BoxMesh" id="BoxMesh_island"]
+size = Vector3(20, 2, 20)
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_island"]
+albedo_color = Color(0.76, 0.7, 0.5, 1)
+
+[node name="MainWorld" type="Node3D" unique_id=788588717]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=60727747]
+environment = SubResource("Environment_1")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=910501599]
+transform = Transform3D(0.8660254, 0.35355338, -0.35355338, 0, 0.70710677, 0.70710677, 0.5, -0.6123724, 0.6123724, 0, 10, 0)
+shadow_enabled = true
+
+[node name="Water" type="MeshInstance3D" parent="." unique_id=1240235591]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.5999298, -0.8820801, 0.88139343)
+material_override = SubResource("ShaderMaterial_water")
+mesh = SubResource("PlaneMesh_water")
+script = ExtResource("4")
+barco_path = NodePath("../Ship")
+
+[node name="Island" type="MeshInstance3D" parent="." unique_id=30725558]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 30, 1, 0)
+mesh = SubResource("BoxMesh_island")
+surface_material_override/0 = SubResource("StandardMaterial3D_island")
+
+; Ambiente de puerto: va POSICIONADO en la isla, no en el barco, porque es un sonido de LUGAR.
+; Asi aparece solo al acercarte y se apaga mar adentro, sin logica ninguna. La isla mide 20 m,
+; de ahi el unit_size de 25 (suena entero mientras estas encima) y los 90 m de alcance.
+[node name="AmbientePuerto" type="AudioStreamPlayer3D" parent="Island"]
+stream = ExtResource("14")
+volume_db = -8.0
+unit_size = 25.0
+max_distance = 90.0
+autoplay = true
+
+[node name="GestorBarcos" type="Node3D" parent="." unique_id=1258553189]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -10)
+script = ExtResource("8")
+barcos = Array[PackedScene]([ExtResource("13"), ExtResource("2"), ExtResource("7"), ExtResource("12")])
+altura_flotacion = 1.7393582
+
+[node name="FlechasViento" type="MultiMeshInstance3D" parent="." unique_id=1923247525]
+script = ExtResource("5")
+barco_path = NodePath("../Ship")
+
+[node name="HUD" type="CanvasLayer" parent="." unique_id=1650535649]
+script = ExtResource("6")
+
+[node name="Musica" type="AudioStreamPlayer" parent="." unique_id=738563383]
+volume_db = 5.0
+script = ExtResource("9")
+
+[node name="CampoTiro" type="Node3D" parent="." unique_id=91002001]
+script = ExtResource("campo_tiro")
+; Boyas a distancia CONOCIDA: es lo que convierte la escena en un campo de calibracion y no en
+; un adorno. Con la cuna a tanto, la bala cae a tanto.
+distancias = Array[float]([60.0, 120.0, 200.0, 320.0])
