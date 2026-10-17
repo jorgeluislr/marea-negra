@@ -23,12 +23,15 @@ extends Node
 ##     rumbo dentro de ese cono no se puede navegar: hay que dar BORDADAS. Un capitán que apunte
 ##     la proa al enemigo cuando el enemigo está a barlovento se queda parado mirando al viento,
 ##     y eso se ve como un barco tonto.
-##   · **Los cañones no giran.** `Canon.elevacion` está en 0 mientras el tubo sea rígido con la
-##     cureña, y no hay traversa. Así que **el barco ES la mira**: para disparar hay que poner al
-##     enemigo por el COSTADO, y toda la maniobra de combate consiste en eso.
-##   · **La recarga son 5 s por pieza** (`Artilleria.recarga`) y hay dos bandas. Girar para
-##     presentar la otra banda mientras la primera recarga es lo que se hacía de verdad, y aquí
-##     sale de la misma cuenta.
+##   · **Los cañones apenas giran.** La cuña recorre 15° y el espeque 15° a cada banda, así que
+##     **el barco es la mira**: para disparar hay que poner al enemigo por el COSTADO, y toda la
+##     maniobra de combate consiste en eso. Lo que la puntería fina añade es la DISTANCIA — con
+##     la cuña, de 27 a 490 m en esta balandra—, no la dirección.
+##   · **La recarga son 5 s por pieza** (`Artilleria.recarga`) y hay dos bandas, pero presentar
+##     la otra mientras la primera recarga NO se hace aquí: es una maniobra de un costado de doce
+##     piezas, y con dos por banda arribar y volver a orzar cuesta mucho más que esperar. Se
+##     intentó eligiendo la banda por cuál tenía más cargadas, y lo que salió fue un barco
+##     apuntando a babor con el enemigo por estribor y dando media vuelta cada 5 s.
 ##   · **El barlovento no es adorno.** Desde barlovento eliges la distancia y el momento, y el de
 ##     sotavento no puede cerrar porque tendría que navegar dentro de su propia zona muerta. Es
 ##     la única ventaja posicional que este modelo permite de verdad.
@@ -47,9 +50,13 @@ extends Node
 ## disparar). Avisa en vez de callar porque un capitán que no gobierna parece un capitán tonto, y
 ## eso es media sesión perdida buscando la táctica que falla.
 ##
-## SIN MEDIR TODAVÍA: no hay ni un número de esta clase comprobado. Las herramientas que los van
-## a dar son `tools/rumbo_ia.tscn` (¿llega a un rumbo a barlovento, en cuántas viradas y con
-## cuánto sobrepaso?) y `tools/duelo.tscn` (¿a qué distancia abre fuego, cuántas balas tocan?).
+## ── Qué está medido ──────────────────────────────────────────────────────────
+##
+## `tools/porque_no_dispara.tscn` mide las tres cosas que este capitán hacía mal —a qué distancia
+## se coloca, si su puntería llega a cubrir el blanco y si el timón da volantazos— y
+## `tools/duelo.tscn` enfrenta a dos y cuenta disparos, tocados y distancia final. Los números
+## que justifican cada decisión están en el comentario de cada método, y el paquete `ia` de la
+## batería los vigila.
 
 ## Bando. Es enemigo de todo barco cuyo bando no sea el suyo; los barcos que no declaran bando se
 ## toman como del jugador, que es lo que son hoy.
@@ -68,6 +75,14 @@ extends Node
 ## Distancia a la que quiere pelear, en metros, POR SI el barco no monta artillería. Cuando la
 ## monta no se usa: manda `_alcance_real()`, que se lo pregunta a las piezas.
 @export var distancia_combate := 130.0
+
+## A qué parte de su alcance máximo se bate, de 0 a 1.
+##
+## A la MITAD, y no pegado ni al límite, porque es lo que deja corregir a los dos lados: desde la
+## mitad de la carrera de la cuña se puede alargar y acortar el tiro, mientras que desde el tope
+## de abajo sólo se puede alargar y desde el de arriba no se puede nada. Un artillero se coloca
+## donde pueda rectificar, no donde justo llegue.
+@export_range(0.1, 1.0) var fraccion_de_alcance := 0.5
 
 ## Por encima de esto no va al enemigo: va a BARLOVENTO del enemigo. Buscar el barlovento desde
 ## más cerca es regalar la posición mientras cruzas por delante de sus cañones.
@@ -117,6 +132,24 @@ var _distancia_previa := INF
 var _puesto_idx := -1
 ## Velocidad de apertura de la distancia al blanco, m/s suavizados. >0 = se escapa.
 var _tasa := 0.0
+## Batería presentada. Con memoria por lo mismo que la bordada: un blanco que cruza la línea de
+## crujía haría bailar la banda de un lado a otro, y con ella el rumbo de la andanada.
+var _banda := "estribor"
+## Si el barco va lento AHORA MISMO, con histéresis. Ver `_lento()`.
+var _iba_lento := false
+## Virada en redondo en curso: 0 = ninguna, ±1 = la banda a la que se lleva la caña. Ver
+## `_gobernar()`.
+var _redondo := 0
+## Virada por avante en curso: 0 = ninguna, ±1 = la banda a la que se lleva la caña. Se guarda
+## por lo mismo que `_redondo`: a mitad de cruzar el ojo el barco va lento, y sin memoria la regla
+## de "lento, no cruces" la abortaba.
+var _avante := 0
+## Arribando para coger arrancada antes de virar por avante: 0 = no, ±1 = la banda de la virada
+## que viene después. Ver `_gobernar()`.
+var _arribando := 0
+## Radio al que se está peleando, en metros. 0 = todavía no se está a tiro. Se fija al entrar
+## en la andanada y no se recalcula: ver el porqué en `_decidir()`.
+var _radio_combate := 0.0
 var _aviso_dado := false
 
 
@@ -153,9 +186,35 @@ func _en_irons() -> bool:
 	return _parado > 1.5
 
 
+## Si el barco va lento, y por tanto no puede cruzar el ojo del viento a la virada.
+##
+## Con DOS umbrales y memoria, que es lo que faltaba: con uno solo (0,3 × `velocidad_max`), un
+## barco navegando justo en él entra y sale de la condición cada frame, y como de ella depende
+## qué ley gobierna la caña, el timón salta de banda a banda. Medido con
+## `tools/porque_no_dispara.tscn`: **1.176 volantazos en 60 s** a una velocidad media de 2,78 m/s
+## con el umbral en 2,70. Un umbral al que se llega navegando —el que da un rumbo ceñido— es
+## justo donde un barco se pasa la vida.
+##
+## Y los dos umbrales salen de `propulsion_minima`, no de números nuevos: esa es la propulsión
+## por debajo de la cual el capitán no considera navegable un rumbo, así que la velocidad que le
+## corresponde (3,1 m/s en esta balandra) es la frontera entre navegar y no navegar. Lento es ir
+## a menos de la MITAD de eso, y se deja de estarlo al llegar a nueve décimas.
+##
+## Puestos en 0,25 y 0,45 de `velocidad_max` —que fue el primer intento— el barco sale lento
+## para siempre: un rumbo ceñido da 3,1 m/s y el umbral alto pedía 4,05, así que la regla de "no
+## cruces el ojo" quedaba armada permanentemente y **el capitán dejó de virar por avante**. La
+## prueba lo cazó: de una virada a cero.
 func _lento() -> bool:
-	var maxima: float = float(_barco.get("velocidad_max")) if "velocidad_max" in _barco else 9.0
-	return absf(float(_barco.get("velocidad"))) < maxima * 0.3
+	return _iba_lento
+
+
+## Si lleva arrancada para cruzar el ojo virando por avante. La cuenta es del casco
+## (`Barco.velocidad_para_virar()`): una virada se empieza solo si se puede terminar, y si no se
+## vira en redondo, que es lo que hace un patrón con un barco que no tiene arrancada para orzar.
+func _arrancada_para_virar() -> bool:
+	if not _barco.has_method("velocidad_para_virar"):
+		return true
+	return float(_barco.get("velocidad")) >= float(_barco.call("velocidad_para_virar"))
 
 
 func _physics_process(delta: float) -> void:
@@ -165,6 +224,9 @@ func _physics_process(delta: float) -> void:
 		_parado += delta
 	else:
 		_parado = 0.0
+	var maxima: float = float(_barco.get("velocidad_max")) if "velocidad_max" in _barco else 9.0
+	var navegando := maxima * propulsion_minima
+	_iba_lento = absf(float(_barco.get("velocidad"))) < navegando * (0.9 if _iba_lento else 0.5)
 	_reloj -= delta
 	if _reloj <= 0.0:
 		# Un capitán torpe tarda más en reaccionar: con pericia 0,1 el periodo se multiplica por
@@ -172,6 +234,7 @@ func _physics_process(delta: float) -> void:
 		_reloj = periodo / clampf(pericia, 0.1, 1.0)
 		_decidir()
 	_gobernar()
+	_puntear()
 
 
 # ── La cabeza ────────────────────────────────────────────────────────────────
@@ -179,6 +242,7 @@ func _decidir() -> void:
 	_blanco = _elegir_blanco()
 	if _blanco == null:
 		_maniobra = Maniobra.SIN_BLANCO
+		_radio_combate = 0.0
 		# Sin nadie a quien perseguir, mantiene el rumbo si es navegable. Así al menos navega en
 		# vez de quedarse a la deriva de proa al viento.
 		_rumbo_pedido = _rumbo_navegable(_proa())
@@ -205,7 +269,11 @@ func _decidir() -> void:
 		_tasa = lerpf(_tasa, (distancia - _distancia_previa) / maxf(intervalo, 0.01), 0.4)
 	_distancia_previa = distancia
 	var abriendo := _tasa > 0.3
-	if distancia > distancia_barlovento and not abriendo:
+	# El alcance, antes que nada, porque de él sale también hasta dónde vale la pena ganar el
+	# barlovento: hacerlo desde DENTRO de la distancia de tiro es dejar de disparar para
+	# maniobrar. `distancia_barlovento` queda como suelo para un barco sin artillería.
+	var alcance := _alcance_real()
+	if distancia > maxf(distancia_barlovento, alcance * 1.5) and not abriendo:
 		_maniobra = Maniobra.BARLOVENTO
 		_rumbo_pedido = _rumbo_navegable(_hacia_el_barlovento_del_blanco())
 		return
@@ -222,25 +290,67 @@ func _decidir() -> void:
 	# un tiro que entra por la proa o por la popa atraviesa **3,2 veces mas barco** que uno por
 	# el traves. Enfilar —lo que en la vela se llamo siempre cruzar la T— no es una preferencia
 	# estetica: es el blanco mas grande que ofrece ese casco, y sale de su propia medida.
-	var banda := _banda_cargada()
-	var alcance := _alcance_real()
+	var banda := _banda_que_bate()
 	var puesto := _mejor_puesto(alcance)
 	var a_puesto := _horizontal(puesto - _barco.global_position)
 	# Para tirar por estribor, el enemigo tiene que caer a estribor: la proa deseada es el rumbo
 	# al enemigo girado un cuarto de vuelta. El signo sale de la orientacion del barco (proa en
 	# -Z, estribor en +X), no de probar a ver.
+	#
+	# Y QUÉ costado presentar no es lo mismo que en cuál cae el enemigo ahora mismo: para batir
+	# por estribor hay que sostener ese rumbo concreto, y ese rumbo puede caer en la zona muerta.
+	# Cuando pasa, el barco se va a la ceñida que sí puede navegar, el enemigo se le queda por la
+	# aleta y no dispara — medido con el viento de través: de 180 a 256 m en 45 s sin un solo
+	# tiro. Se presenta el costado cuya perpendicular se pueda navegar, y en igualdad el que ya
+	# batía. Las dos perpendiculares están a 180° una de otra y la zona muerta mide 80°, así que
+	# nunca pueden caer las dos dentro.
 	var perpendicular := hacia.rotated(Vector3.UP, PI * 0.5 if banda == "estribor" else -PI * 0.5)
-	if a_puesto.length() > alcance * 0.25:
+	var otra := -perpendicular
+	if _propulsion(perpendicular) < propulsion_minima and _propulsion(otra) >= propulsion_minima:
+		perpendicular = otra
+	# Fuera de alcance se CIERRA hacia el puesto elegido; dentro de alcance no se cierra más: se
+	# pelea desde donde se está. Irse a la distancia de libro teniendo ya al enemigo a tiro es
+	# pasarse la pelea navegando — medido: naciendo a 180 m con el anillo en 250, el capitán se
+	# pasaba media pelea abriéndose y soltaba 4 tiros en 45 s.
+	#
+	# Y el radio se FIJA al entrar en la andanada en vez de seguir a la distancia del momento.
+	# Seguirla se muerde la cola: el anillo pasa siempre por donde está el barco, así que siempre
+	# se cree en su puesto y va abriendo sin darse cuenta — medido, de 180 a 256 m en 45 s.
+	if distancia > alcance * (1.15 if _radio_combate > 0.0 else 1.0):
 		_maniobra = Maniobra.CERRAR
+		_radio_combate = 0.0
 		_rumbo_pedido = _rumbo_navegable(a_puesto.normalized())
 	else:
-		# Ya en el puesto: presentar la banda y sostenerla.
+		# Ya a tiro: sostener la banda presentada RODEANDO al enemigo, no tirando por la
+		# perpendicular. Son dos cosas distintas y la diferencia se mide: con rumbo perpendicular
+		# el barco se va en línea recta y la distancia crece sola, porque una perpendicular a una
+		# demora que cambia no es una circunferencia. Persiguiendo un punto del anillo 45° más
+		# allá, el rumbo se curva solo y la distancia se sostiene.
+		if _radio_combate <= 0.0:
+			_radio_combate = distancia
 		_maniobra = Maniobra.ANDANADA
-		_rumbo_pedido = _rumbo_navegable(perpendicular)
+		_rumbo_pedido = _rumbo_navegable(_punto_de_caza(_radio_combate, perpendicular))
 
+
+# ── La mano: la puntería ─────────────────────────────────────────────────────
+## Laya la batería y suelta la andanada en cuanto el tiro cubre. Va en el reloj de los FRAMES y
+## no en el de las decisiones, por lo mismo que el timón: es la mano, no la cabeza.
+##
+## Y no es una cuestión de gusto, es la ola. Entre una decisión y la siguiente pasa un cuarto de
+## segundo, y en ese rato el casco sube y baja con la mar: la boca se mueve medio metro y **medio
+## metro de ánima son 5-9 m de alcance** a estas distancias (dR/dh ≈ 18 m por metro a 110 m).
+## Apuntando cuatro veces por segundo, el residuo del tiro se quedaba en +1 a +5 m de largo —
+## sistemáticamente largo, porque se apunta en un instante y se dispara en otro— y el costado
+## enemigo mide 1,9 m de manga, así que el tiro no cubría casi nunca. Medido con
+## `tools/porque_no_dispara.tscn`. Con la puntería en el frame, se laya y se tira en el mismo
+## instante y el residuo es el de la puntería, no el del oleaje.
+func _puntear() -> void:
+	if _blanco == null or not is_instance_valid(_blanco):
+		return
+	var banda := _banda_que_bate()
 	# Apuntar SIEMPRE la banda que va a tirar, aunque todavía no toque disparar: es lo que lee
 	# `disparar_banda` y lo que dibuja la guía de tiro, así que sin esto el barco acabaría
-	# disparando con la banda contraria a la que ha presentado.
+	# disparando con la banda contraria a la que tiene puesta en el blanco.
 	if _barco.has_method("apuntar"):
 		_barco.call("apuntar", banda)
 	else:
@@ -323,10 +433,13 @@ func _mejor_puesto(alcance: float) -> Vector3:
 ## ventana se abre y el tiro se corrige en vez de esperar a que la geometria cuadre sola.
 ##
 ## **Se apunta PROBANDO, con la propia pieza de oraculo**: se le pone una elevacion, se le
-## pregunta `punto_de_caida()` y se compara. Ni se invierte la parabola ni se razonan los signos
-## —que dependen de la banda, porque la pieza de estribor va media vuelta girada—, y por tanto
-## no hay forma de equivocarse en ellos. Es la misma razon por la que el alcance se pregunta en
-## vez de escribirse.
+## pregunta `punto_de_caida()` y se compara. Ni se invierte la parabola ni se razonan los signos,
+## y por tanto no hay forma de equivocarse en ellos. Es la misma razon por la que el alcance se
+## pregunta en vez de escribirse.
+##
+## (El comentario decía que los signos dependen de la banda porque la pieza de estribor va media
+## vuelta girada. No dependen: esa media vuelta es sobre Y y no toca la vertical. Compensarla por
+## banda era el fallo que se corrigió en `Canon._aplicar_punteria` el 12 y el 13 de septiembre.)
 func _apuntar_la_bateria(banda: String) -> void:
 	if not _barco.has_method("apuntar_fino"):
 		return
@@ -348,38 +461,53 @@ func _apuntar_la_bateria(banda: String) -> void:
 
 	# ── Cuna: la elevacion cuyo punto de caida cae a la distancia que falta ──
 	var e0: float = float(c.get("elevacion"))
-	var mejor_e := e0
-	var mejor_err := INF
-	for i in 16:
-		var e: float = lerpf(-3.0, 12.0, float(i) / 15.0)
+	var mejor_e := _afinar(Canon.ELEVACION_MIN, Canon.ELEVACION_MAX, func(e: float) -> float:
 		c.set("elevacion", e)
-		var r := _horizontal(c.call("punto_de_caida") - boca).length()
-		var err := absf(r - falta)
-		if err < mejor_err:
-			mejor_err = err
-			mejor_e = e
+		return absf(_horizontal(c.call("punto_de_caida") - boca).length() - falta))
 	c.set("elevacion", e0)
 
 	# ── Espeque: el giro lateral que deja el tubo mirando al blanco ──
 	var g0: float = float(c.get("giro_lateral"))
-	var mejor_g := g0
-	var mejor_ang := INF
-	for i in 13:
-		var g: float = lerpf(-15.0, 15.0, float(i) / 12.0)
+	var mejor_g := _afinar(-Canon.ESPEQUE_MAX, Canon.ESPEQUE_MAX, func(g: float) -> float:
 		c.set("giro_lateral", g)
 		var d := _horizontal(c.call("direccion_global"))
 		if d.length() < 0.01:
-			continue
-		var ang := absf(_angulo_con_signo(d.normalized(), al_blanco.normalized()))
-		if ang < mejor_ang:
-			mejor_ang = ang
-			mejor_g = g
+			return INF
+		return absf(_angulo_con_signo(d.normalized(), al_blanco.normalized())))
 	c.set("giro_lateral", g0)
 
 	# `apuntar_fino` trabaja con INCREMENTOS y los aplica a toda la bateria, asi que se le pasa
 	# la diferencia respecto a lo que ya tenia esta pieza. Todas parten de lo mismo y reciben lo
 	# mismo, asi que no se descuadran entre si.
 	_barco.call("apuntar_fino", mejor_g - g0, mejor_e - e0)
+
+
+## El valor entre `lo` y `hi` que menos error da, barriendo y ESTRECHANDO la ventana alrededor
+## del mejor en cada pasada.
+##
+## Un barrido suelto no basta, y el número lo dice: la cuña recorre 15° y el tiro va de 27 a
+## 490 m, así que con dieciséis puntos el paso es 1° y **1° son 40 m de alcance** a media
+## distancia. El espeque recorría 30° en trece puntos, o sea 2,5°, que a 150 m son 6,5 m — y el
+## casco enemigo mide 1,9 m de manga. Con esa resolución el tiro casi nunca cubría al blanco por
+## mucho que el capitán estuviese bien colocado, y eso se ve como un enemigo que no dispara.
+##
+## Tres pasadas de nueve puntos dejan la cuña en 0,03° (poco más de un metro de alcance) y el
+## espeque en 0,06°, y cuestan 54 evaluaciones cada cuarto de segundo: nada, comparado con no
+## poder disparar.
+func _afinar(lo: float, hi: float, error: Callable) -> float:
+	var mejor := lo
+	for pasada in 3:
+		var mejor_err := INF
+		for i in 9:
+			var v: float = lerpf(lo, hi, float(i) / 8.0)
+			var err: float = float(error.call(v))
+			if err < mejor_err:
+				mejor_err = err
+				mejor = v
+		var paso := (hi - lo) / 8.0
+		lo = mejor - paso
+		hi = mejor + paso
+	return mejor
 
 
 ## El barco enemigo más cercano.
@@ -450,12 +578,20 @@ func _gobernar() -> void:
 	if _rumbo_pedido.length() < 0.01:
 		return
 	var error := _angulo_con_signo(_proa(), _rumbo_pedido)
+	var error_rumbo := error
+	# **Aguantar el giro**: el casco tiene inercia de guiñada (`Barco.inercia_guinada`) y sigue
+	# girando un rato después de levantar la caña, así que se gobierna sobre el error que QUEDARÁ
+	# cuando suelte el giro que ya lleva, no sobre el de ahora — que es lo que hace un timonel al
+	# "aguantar" antes de llegar al rumbo. Sin esto, con la inercia puesta el capitán se pasaba de
+	# rumbo en cada corrección y ciñendo ganaba 18,6 m en 40 s en vez de 21,4.
+	if _barco.has_method("guinada"):
+		error -= float(_barco.call("guinada")) * float(_barco.get("inercia_guinada"))
 	var orden := clampf(error / deg_to_rad(zona_timon), -1.0, 1.0)
 
 	# ── Quedarse de proa al viento ────────────────────────────────────────────
-	# Un velero parado con la proa en el viento no sale solo, y aquí menos: la eficacia del
-	# timón escala con la velocidad (`giro_minimo` 0,2 × `velocidad_giro` 0,45 = 0,09 rad/s
-	# parado), así que dar media vuelta cuesta 17 s. Medido en el duelo: una balandra se quedó
+	# Un velero parado con la proa en el viento no sale solo, y aquí menos: **el timón no hace
+	# nada sin arrancada**, porque lo que gobierna es el agua que pasa por la pala. Medido en el
+	# duelo: una balandra se quedó
 	# a 0,0-0,3 m/s con el rumbo en el ojo del viento durante 40 de los 60 s, sin disparar una
 	# sola vez. Desde fuera es un enemigo tonto.
 	#
@@ -468,15 +604,68 @@ func _gobernar() -> void:
 	#    pasaría por la zona muerta, se da la vuelta por la OTRA banda. Es virar en redondo en
 	#    vez de por avante, que es justo lo que se hace sin arrancada para no quedarse clavado.
 	#    Con arrancada sí se cruza: virar por avante a 9 m/s sale bien y es más corto.
+	#
+	# Y la segunda hay que TERMINARLA, no replantearla a cada frame: dando la vuelta por
+	# sotavento el error de rumbo crece hasta 180° y ahí cambia de signo, así que la condición
+	# que disparó la maniobra deja de cumplirse a mitad de ella y el capitán vuelve a meter la
+	# proa en el viento — para volver a salir al frame siguiente. Por eso la virada en redondo
+	# se guarda (`_redondo`) y no se suelta hasta que la proa llega, igual que la bordada.
 	var origen := _horizontal(-Viento.direccion)
 	if origen.length() > 0.01:
 		origen = origen.normalized()
 		var al_viento := _angulo_con_signo(_proa(), origen)
+		# Si el giro más corto hasta el rumbo pedido pasa por el ojo del viento.
+		var cruza := signf(error_rumbo) == signf(al_viento) and absf(al_viento) < absf(error_rumbo)
+		if _avante != 0 and (not cruza or signf(error_rumbo) != float(_avante)):
+			_avante = 0
+		if _arribando != 0 and (not cruza or signf(error_rumbo) != float(_arribando)):
+			_arribando = 0
 		if _en_irons():
 			# Alejar la proa del viento: si el viento está por babor, timón a estribor.
 			orden = -signf(al_viento) if absf(al_viento) > 0.01 else float(_bordada)
-		elif _lento() and signf(error) == signf(al_viento) and absf(al_viento) < absf(error):
-			orden = -signf(error)
+			_redondo = 0
+			_avante = 0
+			_arribando = 0
+		elif _avante != 0:
+			# **La virada por avante que se empieza con arrancada se TERMINA.** Cruzar el ojo cuesta
+			# arrancada siempre —por eso se empieza con ella—, y con la inercia de guiñada el casco
+			# llega al ojo ya lento. Si a mitad se le aplicaba la regla de "lento, no cruces", la
+			# virada se convertía en una en redondo, el barco recobraba arrancada al arribar y volvía a
+			# intentarla: medido, un ciclo de 6 s con la proa entre −114° y −123° sin cruzar nunca.
+			# Si de verdad se queda sin arrancada en el ojo —perder la virada, que pasa— lo saca
+			# `_en_irons()`, abatiendo, como a cualquier patrón.
+			orden = float(_avante)
+		elif _redondo != 0:
+			# Se suelta al LLEGAR, no al recobrar arrancada: arribando el barco acelera, y si eso la
+			# soltaba volvía a intentar la virada por avante desde donde la había dejado.
+			if absf(error_rumbo) < deg_to_rad(zona_timon) or not cruza and signf(error_rumbo) != float(_redondo):
+				_redondo = 0
+			else:
+				orden = float(_redondo)
+		elif _arribando != 0:
+			# **Coger arrancada antes de virar.** Con el casco lento para cruzar el ojo, se arriba al
+			# rumbo de máxima propulsión por la amura en que se va, y en cuanto hay arrancada se
+			# vira por avante. Virar en redondo en su lugar —270° en vez de 90— le costaba al
+			# capitán todo el barlovento: medido, 0 m en 40 s de ceñida.
+			if _arrancada_para_virar():
+				_avante = _arribando
+				_arribando = 0
+				orden = float(_avante)
+			else:
+				var optimo := deg_to_rad(float(_barco.get("angulo_optimo"))) 					if "angulo_optimo" in _barco else PI * 0.5
+				var lado := signf(al_viento) if absf(al_viento) > 0.01 else 1.0
+				var e_arr := _angulo_con_signo(_proa(), origen.rotated(Vector3.UP, -lado * optimo))
+				if _barco.has_method("guinada"):
+					e_arr -= float(_barco.call("guinada")) * float(_barco.get("inercia_guinada"))
+				orden = clampf(e_arr / deg_to_rad(zona_timon), -1.0, 1.0)
+		elif cruza and _lento():
+			_redondo = int(-signf(error_rumbo))
+			orden = float(_redondo)
+		elif cruza and not _arrancada_para_virar():
+			_arribando = int(signf(error_rumbo))
+		elif cruza:
+			_avante = int(signf(error_rumbo))
+			orden = float(_avante)
 	# El signo está MEDIDO, no deducido (`tools/gira_o_no.tscn`): con `orden_timon` = +1 el
 	# casco pasó de 90° a −151° de rumbo en 8 s, o sea que un valor POSITIVO mueve la proa a
 	# BABOR. Por eso `_angulo_con_signo` devuelve positivo hacia babor: los dos signos tienen
@@ -486,6 +675,19 @@ func _gobernar() -> void:
 	# hasta 180°, ahí envuelve y el signo se invierte: el timón oscila a tope y el rumbo se
 	# queda CONGELADO. Medido en el duelo: timón ±1,00 y el rumbo clavado en ±90° durante
 	# 90 s, con el barco navegando a 9 m/s. Un timón saturado que no gira es esa firma.
+	#
+	# **Ciando, este capitán NO invierte la caña, y está medido que es lo que hay que hacer.** El
+	# timón del casco ya obra al revés con arrancada atrás —eso es física del timón y está en
+	# `Barco`—, y lo suyo sería que el capitán lo tuviera en cuenta. Se probó: invirtiendo la orden
+	# cuando la velocidad es negativa, el enemigo pasó de mantener la banda presentada a 85-89° de
+	# demora a írsele a 38° con la caña a tope, y de **18 disparos en 45 s a 2**
+	# (`tools/porque_no_dispara.tscn`).
+	#
+	# Dicho claro: **este capitán no sabe maniobrar dando atrás.** Su ley de caña es proporcional al
+	# error de rumbo y da por supuesta la marcha avante; darle la vuelta al signo sin rehacer la
+	# ley no arregla nada, la descuadra. Salir del ojo del viento ciando —dar atrás y meter la caña
+	# al contrario, que es lo que hace un patrón— sigue pendiente, y mientras tanto sale de ahí
+	# abatiendo, con `_en_irons()`.
 	if "orden_timon" in _barco:
 		_barco.set("orden_timon", orden)
 	else:
@@ -533,6 +735,37 @@ func _rumbo_navegable(deseado: Vector3) -> Vector3:
 
 ## Un punto a barlovento del enemigo, a distancia de combate: la posición desde la que se manda
 ## el encuentro.
+## El rumbo que sostiene la banda presentada: hacia un punto del anillo de tiro 45° más allá, en
+## el sentido en el que el barco ya está rodeando al enemigo.
+##
+## Rodear no es ir perpendicular. La perpendicular es la tangente en ESTE instante y en cuanto se
+## navega un metro ya no lo es, así que un rumbo perpendicular sostenido es una recta y la
+## distancia crece sola. Persiguiendo un punto del anillo el rumbo se curva solo, y de paso vale
+## para las dos cosas: desde fuera del anillo tira hacia dentro y desde dentro hacia fuera.
+##
+## El SENTIDO no se razona, se prueba: de los dos puntos posibles se toma el que cae del lado al
+## que ya apunta la perpendicular de esta banda. Así no hay signo que equivocar, que es la misma
+## regla con la que se apuntan las piezas.
+func _punto_de_caza(radio: float, perpendicular: Vector3) -> Vector3:
+	var u := _horizontal(_barco.global_position - _blanco.global_position)
+	if u.length() < 0.01:
+		return perpendicular
+	u = u.normalized()
+	var mejor := Vector3.ZERO
+	var mejor_dot := -INF
+	for giro in [PI * 0.25, -PI * 0.25]:
+		var sitio: Vector3 = _blanco.global_position + u.rotated(Vector3.UP, giro) * radio
+		var rumbo := _horizontal(sitio - _barco.global_position)
+		if rumbo.length() < 0.01:
+			continue
+		rumbo = rumbo.normalized()
+		var d := rumbo.dot(perpendicular)
+		if d > mejor_dot:
+			mejor_dot = d
+			mejor = rumbo
+	return mejor if mejor_dot > -INF else perpendicular
+
+
 func _hacia_el_barlovento_del_blanco() -> Vector3:
 	var origen := _horizontal(-Viento.direccion).normalized()
 	var cita := _blanco.global_position + origen * distancia_combate
@@ -581,54 +814,64 @@ func _cenida_maxima() -> float:
 
 
 # ── Artillería ───────────────────────────────────────────────────────────────
-## La banda que puede tirar: la que tenga más piezas cargadas. En empate, estribor.
-func _banda_cargada() -> String:
-	return "estribor" if _cargadas("estribor") >= _cargadas("babor") else "babor"
-
-
-func _cargadas(banda: String) -> int:
-	var n := 0
-	for c in _canones(banda):
-		if bool(c.call("listo")):
-			n += 1
-	return n
-
-
-## Hasta dónde llega el tiro de verdad, en metros, **preguntándoselo a las piezas**: la distancia
-## horizontal de la boca a su propio punto de caída, promediada sobre la banda.
+## La batería que BATE al blanco: la del costado por el que cae.
 ##
-## No es un ajuste: es la corrección de un fallo medido. Con la distancia de combate escrita a
-## mano en 130 m, los dos capitanes se estabilizaron a **140 m** y no dispararon ni una vez en
-## 60 s — y hacían bien, porque el tiro caía 8 m corto y el casco enemigo mide 6 m de semieje.
-## Con `elevacion` en 0 el alcance no es una preferencia sino una CONSTANTE del montaje: la boca
-## está a 1,77 m sobre el agua, la bala tarda √(2h/g) = 0,60 s en caer y sale a 220 m/s, o sea
-## 132 m. El capitán tiene que ir a esa distancia exacta, no a una parecida.
+## Se elegía por cuál tenía más piezas cargadas, y eso era un fallo con dos caras. En cuanto
+## disparaba la banda buena se pasaba a la otra, así que **apuntaba a babor con el enemigo por
+## estribor**: el espeque saturaba en sus 15°, el tiro caía entre 120 y 320 m del blanco y
+## durante los 5 s de recarga no había forma de que cubriera. Medido con
+## `tools/porque_no_dispara.tscn`: 4 de 6 distancias con la batería equivocada.
 ##
-## Y sale de `punto_de_caida()`, la misma cuenta que vuela la bala y que dibuja la guía de tiro,
-## así que el día que el tubo bascule y la elevación cambie el alcance, esto lo sigue solo.
+## Y la otra cara es la maniobra: el rumbo que se sostiene en la andanada es el perpendicular
+## elegido POR esta banda, así que cambiarla le daba media vuelta al barco. Eso es un volantazo,
+## y volvía cada 5 s con la recarga.
+##
+## Presentar la otra banda mientras la primera recarga es cierto que se hacía, pero es una
+## MANIOBRA de un barco con costados de doce piezas, no un cambio de puntería: con dos por banda
+## y 5 s de recarga, arribar y volver a orzar cuesta mucho más que esperar.
+##
+## Con histéresis de 10° sobre la crujía: sin ella, el blanco cruzando la línea de proa hace
+## bailar la batería de una banda a otra, y con ella baila también el rumbo de la andanada.
+func _banda_que_bate() -> String:
+	if _blanco == null or not is_instance_valid(_blanco):
+		return _banda
+	var local := _barco.global_transform.basis.inverse() \
+		* (_blanco.global_position - _barco.global_position)
+	var d := Vector2(local.x, local.z).length()
+	if d > 0.01 and absf(local.x) / d > sin(deg_to_rad(10.0)):
+		_banda = "estribor" if local.x > 0.0 else "babor"
+	return _banda
+
+
+## A qué distancia pelea, en metros, **preguntándoselo a las piezas**: el alcance del montaje a
+## tope de cuña, por la fracción de él a la que este capitán quiere batirse.
+##
+## Nació midiendo con la cuña a CERO, y eso era el fallo: el tiro rasante de esta balandra son
+## 59 m y con la cuña arriba llega a 490, así que el capitán se colocaba al **15 % de su
+## alcance** — pegado al enemigo, cañoneando a quemarropa un barco al que podía batir desde diez
+## veces más lejos. Desde fuera se ve como un enemigo que se echa encima en vez de cañonear, y no
+## lo delata nada más: navega bien y apunta bien. Medido con `tools/porque_no_dispara.tscn`.
+##
+## Lo que sigue siendo cierto de aquel comentario, y por lo que se mide a una cuña FIJA y no a la
+## que la batería tenga puesta: desde que el capitán laya las piezas para la distancia real,
+## medir "dónde cae ahora" hace que el alcance sea igual a la distancia actual, el puesto de tiro
+## caiga donde el barco ya está y deje de acercarse. Medido: se plantó a 130 m y no disparó en
+## 70 s. El tope de la cuña es una constante del afuste y lo pone la PIEZA (`Canon.ELEVACION_MAX`),
+## así que el día que el afuste admita más cuña esto lo sigue solo.
 func _alcance_real() -> float:
 	var suma := 0.0
 	var n := 0
 	for banda in ["estribor", "babor"]:
 		for c in _canones(banda):
-			# Con la cuna a CERO, y devolviendola despues. Es la distancia de referencia del
-			# montaje, no la que tenga apuntada ahora mismo: desde que el capitan layea las
-			# piezas para la distancia real, medir "donde cae ahora" hace que el alcance sea
-			# igual a la distancia actual, el puesto de tiro caiga donde el barco ya esta y deje
-			# de acercarse. Medido: se planto a 130 m y no disparo en 70 s.
-			#
-			# Y cero no es un valor cualquiera: es el tiro RASANTE, el menos sensible a
-			# equivocarse en la distancia, que es la posicion desde la que conviene pelear.
-			var e0: float = float(c.get("elevacion"))
-			c.set("elevacion", 0.0)
-			var boca: Vector3 = c.call("boca_global")
-			var caida: Vector3 = c.call("punto_de_caida")
-			var d := _horizontal(caida - boca).length()
-			c.set("elevacion", e0)
+			# `alcance_a` pone la cuña, mide y se la devuelve: la misma cuenta que vuela la bala
+			# y que dibuja la guía de tiro, así que no pueden discrepar.
+			var d: float = float(c.call("alcance_a", Canon.ELEVACION_MAX))
 			if d > 1.0:
 				suma += d
 				n += 1
-	return suma / float(n) if n > 0 else distancia_combate
+	if n == 0:
+		return distancia_combate
+	return (suma / float(n)) * fraccion_de_alcance
 
 
 func _canones(banda: String) -> Array:
@@ -649,8 +892,24 @@ func _canones(banda: String) -> Array:
 ## recorta el agua, 1,9 × 6 m en la balandra), en el espacio del enemigo. Un radio único diría
 ## que un tiro 5 m a la banda es un tocado, y por la banda el casco sólo mide 1,9.
 func _tiro_cubre_al_blanco(banda: String) -> bool:
+	return bool(_residuo_de_tiro(banda)["cubre"])
+
+
+## Dónde cae el tiro de la banda respecto al blanco, en metros, y si lo cubre. Es lo que decide
+## disparar, sacado aparte para que se pueda PREGUNTAR: un capitán que no dispara porque no
+## llega y uno que no dispara porque la puntería no afina se ven igual desde fuera —ninguno
+## dispara— y se arreglan en sitios distintos.
+##
+##   · `largo` — metros de más (+) o de menos (−) sobre la línea de tiro: lo corrige la cuña.
+##   · `traves` — metros a la banda: lo corrige el espeque.
+##   · `cubre` — si la bala cae dentro de la elipse del casco enemigo.
+##   · `listas` — piezas cargadas de esa banda. Con 0, los otros números no dicen nada.
+##
+## Se queda con la pieza cuyo tiro pasa más cerca, que es la que decide el fuego.
+func _residuo_de_tiro(banda: String) -> Dictionary:
+	var sale := {"largo": INF, "traves": INF, "cubre": false, "listas": 0}
 	if _blanco == null or not is_instance_valid(_blanco):
-		return false
+		return sale
 	var vel_blanco := Vector3.ZERO
 	if _blanco is CharacterBody3D:
 		vel_blanco = (_blanco as CharacterBody3D).velocity
@@ -660,9 +919,11 @@ func _tiro_cubre_al_blanco(banda: String) -> bool:
 	# Un capitán torpe se conforma con menos: dispara cuando el tiro aún no cubre, y falla.
 	semiejes /= clampf(pericia, 0.1, 1.0)
 
+	var mejor := INF
 	for c in _canones(banda):
 		if not bool(c.call("listo")):
 			continue
+		sale["listas"] = int(sale["listas"]) + 1
 		var boca: Vector3 = c.call("boca_global")
 		var v0: Vector3 = c.call("velocidad_salida")
 		var vuelo := Bala.tiempo_hasta(boca, v0, float(c.get("altura_mar")))
@@ -670,13 +931,62 @@ func _tiro_cubre_al_blanco(banda: String) -> bool:
 			continue
 		var caida: Vector3 = c.call("punto_de_caida")
 		var futuro := _blanco.global_position + vel_blanco * vuelo
-		# En los ejes del ENEMIGO, para que la elipse esté orientada con su casco: X es la manga
-		# y Z la eslora.
-		var d: Vector3 = _blanco.global_transform.basis.inverse() * (caida - futuro)
-		if (d.x * d.x) / (semiejes.x * semiejes.x) \
-				+ (d.z * d.z) / (semiejes.y * semiejes.y) <= 1.0:
-			return true
-	return false
+		# ── ¿Cubre? ───────────────────────────────────────────────────────────
+		# No es que la bala CAIGA dentro de la elipse del casco: eso trata al enemigo como una
+		# mancha plana sobre el agua, y un barco tiene ALTO. Una bala cuyo punto de caída quede
+		# veinte metros más allá pasa por encima del blanco a dos metros de altura, o sea por
+		# dentro de su casco, y la `Bala` de verdad choca con él — vuela tirando un rayo contra
+		# la caja de cada barco, no mirando dónde tocará el agua. Con el criterio plano esos
+		# tiros se descartaban.
+		#
+		# Y eso es justo lo que la mar se llevaba por delante: con el casco cabeceando, el punto
+		# de caída se va metros arriba y abajo entre apuntar y disparar, y casi nunca caía en
+		# una elipse de 1,9 m de manga. Medido: en el mundo con mar el capitán disparaba 4 veces
+		# en 45 s y en una escena sin mar, 12 (`tools/porque_no_dispara.tscn`).
+		#
+		# Así que se comprueba lo que de verdad decide el impacto: dónde va la bala AL LLEGAR al
+		# blanco, y si eso cae dentro de su casco — en planta, su elipse; en alto, entre el agua
+		# y su regala. La regala se le pregunta al barco (`altura_regala_en`), que la muestreó
+		# de su propio casco.
+		var agua := float(c.get("altura_mar"))
+		var horizontal := _horizontal(futuro - boca)
+		var falta := horizontal.length()
+		var vh := _horizontal(v0).length()
+		if falta > 0.01 and vh > 0.01:
+			var al_llegar := Bala.punto(boca, v0, falta / vh)
+			var techo := agua + 1000.0
+			if _blanco.has_method("altura_regala_en"):
+				var r := float(_blanco.call("altura_regala_en", futuro))
+				if is_finite(r):
+					techo = r
+			# En los ejes del ENEMIGO, para que la elipse esté orientada con su casco: X es la
+			# manga y Z la eslora.
+			var p: Vector3 = _blanco.global_transform.basis.inverse() * (al_llegar - futuro)
+			if (p.x * p.x) / (semiejes.x * semiejes.x) \
+					+ (p.z * p.z) / (semiejes.y * semiejes.y) <= 1.0 \
+					and al_llegar.y >= agua and al_llegar.y <= techo:
+				sale["cubre"] = true
+		# Y el error repartido en las DOS correcciones que el artillero tiene en la mano, que no
+		# son los ejes del enemigo: a lo largo de la línea de tiro lo arregla la cuña, y al
+		# través de ella el espeque. Así el número dice qué mando se queda corto.
+		var linea := _horizontal(futuro - boca)
+		if linea.length() < 0.01:
+			continue
+		linea = linea.normalized()
+		var err := _horizontal(caida - futuro)
+		var largo := err.dot(linea)
+		var traves := err.dot(linea.rotated(Vector3.UP, PI * 0.5))
+		if absf(largo) + absf(traves) < mejor:
+			mejor = absf(largo) + absf(traves)
+			sale["largo"] = largo
+			sale["traves"] = traves
+	return sale
+
+
+## El tiro de la banda que va a disparar, para las herramientas de medida y las pruebas. Ver
+## `_residuo_de_tiro`.
+func residuo_de_tiro() -> Dictionary:
+	return _residuo_de_tiro(_banda_que_bate())
 
 
 # ── Órdenes sueltas ──────────────────────────────────────────────────────────

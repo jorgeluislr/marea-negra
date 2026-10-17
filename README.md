@@ -133,11 +133,10 @@ Drive sube fichero a fichero sin transacción y el `index` o las refs acaban a m
 
 - Reemplazar la cápsula del jugador por un modelo con animaciones (idle, correr, trepar,
   espada) usando un `AnimationTree`.
-- Mar de verdad, fase 2: el mar ya tiene olas de Gerstner, disco con faldón hasta 20 km y
-  curvatura del horizonte (autoload `Oleaje` + `oleaje.gdshaderinc`,
-  la misma función en el shader y en GDScript), pero el barco sigue balanceándose con un `sin()`
-  propio a altura fija. Falta que pregunte la altura en cuatro puntos del casco y saque de ahí
-  altura, cabeceo y escora.
+- Mar de verdad, fase 3: el mar tiene olas de Gerstner, disco con faldón hasta 20 km y curvatura
+  del horizonte, y el barco ya flota sobre la ola (altura, cabeceo y escora de cuatro puntos del
+  casco). Falta lo que arrastra: que el personaje no se caiga de la cubierta al cabecear (un
+  `CharacterBody3D` no hereda el movimiento de la plataforma) y suavizar la cámara.
 - Combate: espada cuerpo a cuerpo a pie, cañones en el barco (raycast o proyectiles físicos),
   daño al casco y al velamen.
 - Mundo: varias islas, sistema de viaje en el mar abierto, puertos donde comprar/vender y

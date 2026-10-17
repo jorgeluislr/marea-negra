@@ -1,0 +1,10 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/mapa/carta_nautica.gd" id="1"]
+[ext_resource type="Resource" path="res://assets/mapa/carta_caribe.tres" id="2"]
+[ext_resource type="Resource" path="res://assets/islas/archipielago.res" id="3"]
+
+[node name="CartaNautica" type="CanvasLayer"]
+script = ExtResource("1")
+carta = ExtResource("2")
+archipielago = ExtResource("3")

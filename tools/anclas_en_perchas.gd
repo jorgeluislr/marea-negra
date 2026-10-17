@@ -34,21 +34,27 @@ func _ready() -> void:
 				# mayor, que lleva 0 desde que sus bordes van cosidos a los palos.
 				var cu: SoftBody3D = d["cuerpo"]
 				_telas.append({"nombre": str(h.get("nombre_malla")), "cuerpo": cu,
-							   "choca": cu.collision_mask != 0,
+							   "choca": cu.collision_mask != 0, "mascara": cu.collision_mask,
 							   "fijo": d["fijo"] as PackedByteArray})
 	# TODAS las capsulas de cada percha, no solo la primera: desde que los palos se describen
 	# por tramos, `get_child(0)` es el tramo del PIE y con el la bandera —que va en la perilla—
 	# salia siempre limpia. Es el error que hizo descartar los colisionadores como causa.
-	for c in _barco.find_children("Percha_*", "StaticBody3D", true, false):
-		for hijo in c.get_children():
-			var cs := hijo as CollisionShape3D
-			if cs == null:
-				continue
-			var cap := cs.shape as CapsuleShape3D
-			if cap == null:
-				continue
-			_perchas.append({"nodo": c, "forma": cs, "r": cap.radius, "h": cap.height,
-							 "nombre": "%s/%s" % [c.name, cs.name]})
+	#
+	# Y TODOS los cuerpos, no solo los `Percha_*`: los muros de la lona detras de los obenques son
+	# `Lona_*`, y son justo los que la mayor mira. Si la vela choca con una capsula lo decide la
+	# CAPA de esa capsula contra la mascara de la vela, no que la mascara sea distinta de cero.
+	for patron in ["Percha_*", "Lona_*"]:
+		for c in _barco.find_children(patron, "StaticBody3D", true, false):
+			for hijo in c.get_children():
+				var cs := hijo as CollisionShape3D
+				if cs == null:
+					continue
+				var cap := cs.shape as CapsuleShape3D
+				if cap == null:
+					continue
+				_perchas.append({"nodo": c, "forma": cs, "r": cap.radius, "h": cap.height,
+								 "capa": (c as StaticBody3D).collision_layer,
+								 "nombre": "%s/%s" % [c.name, cs.name]})
 	print("velas: %s   perchas: %s" % [
 		_telas.map(func(t): return "%s%s" % [t["nombre"], "" if t["choca"] else "(sin colision)"]),
 		_perchas.map(func(p): return p["nombre"])])
@@ -82,7 +88,7 @@ func _physics_process(delta: float) -> void:
 				var d := _dentro(p, per)
 				if d > prof:
 					prof = d
-				if d > 0.0005 and fijo[i] == 1 and tela["choca"]:
+				if d > 0.0005 and fijo[i] == 1 and (int(tela["mascara"]) & int(per["capa"])) != 0:
 					var clave: String = "%s -> %s" % [tela["nombre"], per["nombre"]]
 					_culpables[clave] = maxf(float(_culpables.get(clave, 0.0)), d)
 			if prof > 0.0005:

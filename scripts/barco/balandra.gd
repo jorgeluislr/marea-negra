@@ -25,6 +25,9 @@ func _ready() -> void:
 	# deduce muestreándolo.
 	colision_casco = "casco_lod0"
 	colision_mallas_suelo = ["cubierta_min", "bodega"]
+	# La bodega es además la caja con la que se recorta el agua: es el único hueco por el que se
+	# ve el mar dentro del barco, a través de sus cuatro escotillas.
+	malla_bodega = "bodega"
 	# Si la instancia trae su propia carga puesta en el inspector, se respeta.
 	if cargamento.is_empty():
 		cargamento = _carga_de_salida()

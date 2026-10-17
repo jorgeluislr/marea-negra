@@ -1,0 +1,9 @@
+[gd_resource type="Resource" script_class="Relieve" format=3]
+
+[ext_resource type="Script" path="res://scripts/mapa/relieve.gd" id="1"]
+
+; Las alturas del Caribe por celdas de 1 km. Los ficheros de la carpeta los genera
+; blender_src/relieve_caribe.py y no van a git: se regeneran en unos minutos.
+[resource]
+script = ExtResource("1")
+carpeta = "res://assets/islas/relieve"

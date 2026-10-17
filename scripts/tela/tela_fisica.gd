@@ -126,6 +126,14 @@ var _estables := 0                             ## frames seguidos con el reloj f
 var _t_espera := 0.0
 var _fase_flameo := 0.0                       ## fase del flameo transversal
 var _barco_tela: Node3D                       ## de quién cuelga; para preguntarle la desventa
+var _caja_paso := AABB()                       ## caja del paño en el paso anterior (ver `_vigilar_caja`)
+var _caja_motor := AABB()                      ## la última con que el motor rehizo su forma
+var _cajas_rehechas := 0                       ## cuántas veces se ha forzado; para depurar
+## `collision_margin` de `GodotSoftBody3D`: 0,05 en el motor y sin forma de cambiarlo.
+const _MARGEN_MOTOR := 0.05
+## Cuánto puede salirse el paño de la última caja rehecha antes de forzar otra (`_vigilar_caja`).
+## Rehacerla suelta los contactos de ese paso, así que no conviene hacerlo a cada ola.
+@export_range(0.0, 1.0) var holgura_caja := 0.15
 
 ## Bits reservados para que cada paño tenga su propia área de viento (capas 25 a 32). Ocho
 ## bastan: un barco lleva tres telas y solo hay dos barcos vivos a la vez como mucho.
@@ -294,6 +302,9 @@ func _montar() -> void:
 		if _fijo[k] == 1:
 			_cuerpo.set_point_pinned(k, true, _anclas[k].get_path())
 	_rid = _cuerpo.get_physics_rid()
+	var origen := get_node_or_null("/root/Origen")
+	if origen != null and not origen.recentrado.is_connected(_al_recentrar):
+		origen.recentrado.connect(_al_recentrar)
 
 	# Viento: gravedad direccional que reemplaza la del mundo dentro del área.
 	_area = Area3D.new()
@@ -353,6 +364,7 @@ func datos_depuracion() -> Dictionary:
 		"huesos": _hueso_de,
 		"pesos": _peso_de,
 		"recogiendo": _recogiendo,
+		"cajas_rehechas": _cajas_rehechas,
 		# El frame en el que nació el paño: si fue largo, la tela sale estirada y ya no se
 		# recupera. Lo expone para que las pruebas verifiquen la garantía y no la casualidad.
 		"delta_montaje": _delta_montaje,
@@ -420,6 +432,39 @@ func _physics_process(delta: float) -> void:
 	_tras_pose(delta, mats)
 	_colocar_anclas(mats)
 	_actualizar_viento(delta)
+	_vigilar_caja()
+
+
+## Rehace la caja con que el motor ve el paño en la fase ancha cuando se le ha quedado vieja.
+##
+## **Es un fallo de Godot Physics, no de la tela.** `GodotSoftBody3D::update_bounds()` solo
+## rehace la forma del cuerpo —y con ella su caja en la fase ancha— cuando algún punto sale de
+## la caja del PASO ANTERIOR más `collision_margin` (0,05 m, fijo y sin API) en un solo paso. Lo
+## que se mueve menos de 5 cm por paso no la rehace NUNCA: una vela que se abre despacio crece
+## fuera de su caja, y un barco a menos de 3 m/s (5 cm por paso a 60 Hz) se la deja atrás. Con
+## la caja vieja no se forma el par con lo que el paño toca de nuevo, y pasa a través: el muro
+## de detrás del obenque de popa dejaba la mayor metida 14 cm, con 2 caras atravesadas, en cuanto
+## llegaba a él navegando o abriendo despacio, y daba lo mismo que no tener muro (`tela/popa_navegando`,
+## medido el 17-10-2026 con `tools/popa_tras_navegar.tscn`). Rehacer la forma bastó para que la
+## lona saliera sola del muro: de 25 puntos dentro a 0.
+##
+## Se replica la regla del motor con la caja que él mismo da (`soft_body_get_bounds`, que se
+## recalcula cada paso): si la de este paso se sale de la anterior más el margen, el motor ya la
+## ha rehecho; si no, y se sale de la última rehecha, se fuerza sacando el cuerpo del espacio y
+## volviéndolo a meter, que es lo único de la API que obliga a crear la forma de nuevo.
+func _vigilar_caja() -> void:
+	if not _rid.is_valid():
+		return
+	var caja := PhysicsServer3D.soft_body_get_bounds(_rid)
+	if _caja_paso.size == Vector3.ZERO or not _caja_paso.grow(_MARGEN_MOTOR).encloses(caja):
+		_caja_motor = caja
+	elif not _caja_motor.grow(holgura_caja).encloses(caja):
+		var esp := PhysicsServer3D.soft_body_get_space(_rid)
+		PhysicsServer3D.soft_body_set_space(_rid, RID())
+		PhysicsServer3D.soft_body_set_space(_rid, esp)
+		_caja_motor = caja
+		_cajas_rehechas += 1
+	_caja_paso = caja
 
 
 ## Cuenta frames normales seguidos y monta el paño cuando hay bastantes. Se mide el frame de
@@ -502,6 +547,24 @@ func _colocar_anclas(mats: Array[Transform3D]) -> void:
 		# refresco de frame; esto solo adelanta el trabajo a cada paso.
 		if _rid.is_valid():
 			PhysicsServer3D.soft_body_move_point(_rid, k, mundo * sitio)
+
+
+## El mundo se ha corrido `-d` (origen flotante) y los puntos del paño viven en el servidor de
+## física, en coordenadas de mundo: hay que correrlos todos, los libres también.
+##
+## Punto a punto con `soft_body_move_point`, que no le inventa velocidad al solver: medido con
+## `tools/temblor_lejos.tscn` navegando, el paso del recentrado da 91 mm de segunda diferencia en
+## el peor punto contra 110 del resto de la serie (o sea, nada), y veinte recentrados seguidos no
+## estiran el paño. Lo que NO vale es mover el nodo `SoftBody3D` —que manda su transformada al
+## servidor y la aplica a todos los puntos—: el primer recentrado deja 272 aristas pasadas del
+## 25 % y veinte, 2.624. Aplicar una transformada al cuerpo rehace sus constantes, no lo traslada.
+func _al_recentrar(d: Vector3) -> void:
+	if not _rid.is_valid():
+		return
+	for k in _anclas.size():
+		PhysicsServer3D.soft_body_move_point(_rid, k, _cuerpo.get_point_transform(k) - d)
+	_caja_paso.position -= d
+	_caja_motor.position -= d
 
 
 ## Un bit de capa para este paño, para que su área de viento no gobierne a los demás.

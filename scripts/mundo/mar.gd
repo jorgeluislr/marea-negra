@@ -1,5 +1,5 @@
 extends MeshInstance3D
-## Gestiona el mar: malla del agua, shader de olas, estela bajo el barco y recorte del casco.
+## Gestiona el mar: malla del agua, shader de olas, estela del barco y recorte del casco.
 ## Encuentra el barco por el grupo "barco_activo" (sin rutas fijas), así funciona con
 ## cualquier embarcación instanciada o cambiada en runtime. Lee la forma del recorte
 ## de los parámetros del propio barco.
@@ -50,19 +50,16 @@ extends MeshInstance3D
 
 @export var barco_path: NodePath  # opcional: respaldo si no hay nada en el grupo
 
-const MAX_ESTELA := 16
-const VIDA := 3.0
-const INTERVALO := 0.12
-const MOV_MINIMO := 0.05
 
 var _mat: ShaderMaterial
 var _barco: Node3D
 var _paso_fino := 0.0
 var _t0 := 0
 var _trozos := 0
-var _estela: Array[Vector4] = []
-var _t_gota := 0.0
-var _ultima_pos := Vector3.ZERO
+## El rastro del barco activo, que dibuja la estela. Ver `Estela`.
+var _rastro := Estela.new()
+## De qué barco es el rastro: al cambiar de barco con TAB empieza uno nuevo.
+var _barco_del_rastro: Node3D = null
 
 
 func _ready() -> void:
@@ -86,8 +83,15 @@ func _ready() -> void:
 		_mat = get_active_material(0) as ShaderMaterial
 	if _mat == null:
 		push_warning("mar.gd: el agua no tiene un ShaderMaterial (agua.gdshader).")
-	for i in range(MAX_ESTELA):
-		_estela.append(Vector4.ZERO)
+	var o := get_node_or_null("/root/Origen")
+	if o != null:
+		o.recentrado.connect(_al_recentrar)
+
+
+## El mundo se ha corrido `-d` (origen flotante): el rastro de la estela guarda posiciones de mundo
+## y se corre con él. La malla no hace falta, que se recoloca sola en `_seguir_a_la_camara()`.
+func _al_recentrar(d: Vector3) -> void:
+	_rastro.desplazar(Vector2(d.x, d.z))
 
 
 func _barco_activo() -> Node3D:
@@ -95,8 +99,6 @@ func _barco_activo() -> Node3D:
 		_barco = get_tree().get_first_node_in_group("barco_activo") as Node3D
 		if _barco == null and barco_path != NodePath():
 			_barco = get_node_or_null(barco_path) as Node3D
-		if _barco:
-			_ultima_pos = _barco.global_position
 	return _barco
 
 
@@ -110,52 +112,40 @@ func _process(delta: float) -> void:
 		Horizonte.radio_tierra if Horizonte.activa else 1e12)
 	_seguir_a_la_camara()
 
-	# Envejecer los anillos de estela.
-	for i in range(MAX_ESTELA):
-		var e: Vector4 = _estela[i]
-		if e.w > 0.5:
-			e.z += delta
-			if e.z > VIDA:
-				e = Vector4.ZERO
-			_estela[i] = e
-
 	var barco := _barco_activo()
+	_seguir_el_rastro(barco, delta)
 	if barco:
-		_t_gota += delta
-		var pos := barco.global_position
-		if _t_gota >= INTERVALO and pos.distance_to(_ultima_pos) > MOV_MINIMO:
-			_t_gota = 0.0
-			_ultima_pos = pos
-			_anadir_gota(pos)
-		# Recorte del casco (forma y pose la aporta el propio barco).
-		var fwd := -barco.global_transform.basis.z
-		var fwd2 := Vector2(fwd.x, fwd.z)
-		if fwd2.length() > 0.0001:
-			fwd2 = fwd2.normalized()
-		_mat.set_shader_parameter("recorte_activo", true)
-		_mat.set_shader_parameter("barco_pos", Vector2(pos.x, pos.z))
-		_mat.set_shader_parameter("barco_dir", fwd2)
-		_mat.set_shader_parameter("barco_radio", barco.recorte_radio)
-		_mat.set_shader_parameter("recorte_proa_exp", barco.recorte_proa_exp)
-		_mat.set_shader_parameter("recorte_popa_exp", barco.recorte_popa_exp)
+		# Recorte del agua: la caja de la BODEGA del barco, en sus ejes, y su matriz inversa para
+		# llevar cada fragmento allí. Sin bodega declarada no se recorta —mejor ver el mar dentro
+		# que abrir un agujero donde no toca—, y hoy eso es el caso de la lancha, la barca y la
+		# goleta, por las que además no se anda.
+		var caja: Array = barco.caja_recorte()
+		_mat.set_shader_parameter("recorte_activo", bool(barco.recorta_el_agua) and caja.size() == 2)
+		if caja.size() == 2:
+			_mat.set_shader_parameter("barco_inv", barco.global_transform.affine_inverse())
+			_mat.set_shader_parameter("recorte_min", caja[0])
+			_mat.set_shader_parameter("recorte_max", caja[1])
 	else:
 		_mat.set_shader_parameter("recorte_activo", false)
 
-	_mat.set_shader_parameter("estela", _estela)
+	_rastro.aplicar(_mat)
 
 
-func _anadir_gota(pos: Vector3) -> void:
-	var idx := 0
-	var mas_viejo := -1.0
-	for i in range(MAX_ESTELA):
-		if _estela[i].w < 0.5:
-			idx = i
-			mas_viejo = -1.0
-			break
-		if _estela[i].z > mas_viejo:
-			mas_viejo = _estela[i].z
-			idx = i
-	_estela[idx] = Vector4(pos.x, pos.z, 0.0, 1.0)
+## Lleva el rastro del barco activo: su centro y su proa en planta, y la silueta de su casco en
+## la flotación —medida de la malla por el propio barco—, que es lo que da la forma a la estela.
+func _seguir_el_rastro(barco: Node3D, delta: float) -> void:
+	if barco != _barco_del_rastro:
+		_barco_del_rastro = barco
+		_rastro.vaciar()
+		if barco != null and barco.has_method("silueta_de_flotacion"):
+			var sil: Dictionary = barco.silueta_de_flotacion()
+			if not sil.is_empty():
+				_rastro.fijar_casco(sil["ancho"], sil["lo"], sil["hi"])
+	if barco == null:
+		return
+	var g := barco.global_transform
+	var proa := Vector2(-g.basis.z.x, -g.basis.z.z)
+	_rastro.registrar(Vector2(g.origin.x, g.origin.z), proa, delta)
 
 
 ## La malla persigue a la cámara para que el detalle esté siempre donde se mira.
@@ -163,13 +153,20 @@ func _anadir_gota(pos: Vector3) -> void:
 ## En saltos de una celda fina, no continuo: moviéndola libremente los vértices se deslizan
 ## sobre la ola —que vive en coordenadas de mundo y no se entera— y la superficie parece hervir.
 ## Saltando de celda en celda cada vértice cae donde caía el anterior y no se nota nada.
+##
+## La rejilla se cuenta en coordenadas ABSOLUTAS (`Origen`), en doble precisión: contada en las
+## locales, un recentrado que no fuera múltiplo de la celda dejaría los vértices a media celda de
+## donde estaban y el mar herviría ese frame.
 func _seguir_a_la_camara() -> void:
 	var cam := get_viewport().get_camera_3d()
 	if cam == null or _paso_fino <= 0.0:
 		return
 	var c := cam.global_position
-	global_position.x = snappedf(c.x, _paso_fino)
-	global_position.z = snappedf(c.z, _paso_fino)
+	var o := get_node_or_null("/root/Origen")
+	var ox: float = o.x if o != null else 0.0
+	var oz: float = o.z if o != null else 0.0
+	global_position.x = snappedf(float(c.x) + ox, _paso_fino) - ox
+	global_position.z = snappedf(float(c.z) + oz, _paso_fino) - oz
 
 
 ## Monta el disco fino cuando el barco ya tiene sus telas, no antes.

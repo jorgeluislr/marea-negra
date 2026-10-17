@@ -20,7 +20,15 @@ Viento="*res://scripts/mundo/viento.gd"
 Ajustes="*res://scripts/mundo/ajustes.gd"
 Oleaje="*res://scripts/mundo/oleaje.gd"
 Horizonte="*res://scripts/mundo/horizonte.gd"
+Origen="*res://scripts/mundo/origen.gd"
 
 [display]
 
 window/size/mode=3
+
+[shader_globals]
+
+origen_mundo={
+"type": "vec2",
+"value": Vector2(0, 0)
+}

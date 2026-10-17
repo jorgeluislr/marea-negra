@@ -52,3 +52,9 @@ assets/models/*.gltf
 assets/models/*.fbx
 assets/models/*.jpg
 assets/models/*.png
+
+# Claude Code: ajustes locales y memorias (.claude/memoria), fuera del repositorio
+.claude/
+
+# Relieve del Caribe por celdas: lo regenera blender_src/relieve_caribe.py en unos minutos.
+assets/islas/relieve/

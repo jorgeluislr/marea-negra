@@ -68,13 +68,15 @@ const G := 9.81
 ## una mar levantada tarda muchísimo más en cambiar de dirección que en crecer o amainar.
 ##
 ## **Y hay una razón mecánica además de la física.** Girar el campo de olas corre la fase de cada
-## punto en `k·D·Δángulo`, donde D es su distancia al origen del mundo: la cresta se desplaza a
-## `D·Δángulo/s` ENCIMA de su velocidad propia, así que el mar se mueve cada vez más rápido según
-## te alejas navegando, y si el giro es de ida y vuelta el mar avanza y retrocede. Medido
-## siguiendo una cresta con `tools/velocidad_de_las_olas.tscn`, tomando la dirección instantánea
-## del viento —que bambolea 0,12 rad a 0,08 Hz—: en el origen la cresta iba a sus 6 m/s, a 100 m
-## oscilaba entre 0 y 12, y a 300 m entre **−6 y +18**, o sea que retrocedía a seis metros por
-## segundo. Es un artefacto geométrico, no se puede arreglar: solo se puede rolar despacio.
+## punto en `k·D·Δángulo`, donde D es su distancia al PIVOTE del giro: la cresta se desplaza a
+## `D·Δángulo/s` ENCIMA de su velocidad propia, y si el giro es de ida y vuelta el mar avanza y
+## retrocede. Medido siguiendo una cresta con `tools/velocidad_de_las_olas.tscn`, tomando la
+## dirección instantánea del viento —que bambolea 0,12 rad a 0,08 Hz—: en el pivote la cresta iba
+## a sus 6 m/s, a 100 m oscilaba entre 0 y 12, y a 300 m entre **−6 y +18**, o sea que retrocedía
+## a seis metros por segundo. Es un artefacto geométrico: solo se puede rolar despacio y con el
+## pivote donde se mira. El pivote era el origen del mundo, que a 50 km del barco lo convertía en
+## un mar corriendo a cientos de metros por segundo; desde el origen flotante es el BARCO (ver
+## `_girar_en_el_pivote()`).
 @export var inercia_rumbo := 90.0
 
 ## Y del plano de agua en reposo. La pone `mar.gd` desde su propio nodo, porque el agua de este
@@ -98,6 +100,19 @@ var alcances := PackedVector2Array()
 var _dirs: Array[Vector2] = []
 var _coef: Array[Vector4] = []
 var _grupo: Array[Vector4] = []
+## Fase añadida de cada tren, en radianes y en DOBLE precisión: la de la ola y la de su grupo.
+## Ver `_girar_en_el_pivote()` y `_al_recentrar()`.
+var _fase_ola := PackedFloat64Array()
+var _fase_grupo := PackedFloat64Array()
+## Lo que el pivote ha recorrido EN ABSOLUTO, proyectado sobre el viento y su perpendicular (doble
+## precisión). Es lo que lleva el ruido del relieve fino y de la espuma: ver `aplicar()`.
+var _ruido_v := 0.0
+var _ruido_l := 0.0
+## Dónde estaba el pivote, en absoluto, la última vez.
+var _pivote_x := 0.0
+var _pivote_z := 0.0
+var _pivote := Vector2.ZERO
+var _con_pivote := false
 var _fuerza_suave := 1.0
 var _eje := Vector2.RIGHT
 
@@ -107,11 +122,37 @@ func _ready() -> void:
 		_dirs.append(Vector2.RIGHT)
 		_coef.append(Vector4.ZERO)
 		_grupo.append(Vector4.ZERO)
+		_fase_ola.append(0.0)
+		_fase_grupo.append(0.0)
 		# Sin LOD mientras nadie lo fije: ver `alcances`.
 		alcances.append(Vector2(1e9, 1e9))
 	_fuerza_suave = Viento.fuerza
 	_eje = _rumbo_del_viento()
 	_recalcular()
+	_conectar_origen.call_deferred()
+
+
+func _conectar_origen() -> void:
+	var o := get_node_or_null("/root/Origen")
+	if o != null and not o.recentrado.is_connected(_al_recentrar):
+		o.recentrado.connect(_al_recentrar)
+
+
+## El mundo local se ha corrido `-d` (origen flotante) y la ola tiene que seguir donde estaba EN
+## ABSOLUTO. La fase es lineal: `k·dir·(p + d) + φ = k·dir·p + (φ + k·dir·d)`, así que basta
+## sumarle a cada tren `k·dir·d`, en doble y reducido a una vuelta. Sumar el origen dentro del
+## shader, en cambio, daría a 50 km fases de 45.000 radianes, donde la precisión simple solo da
+## pasos de 0,004: el espejo dejaría de cuadrar con GDScript y la ola corta temblaría.
+##
+## Se hace en el acto y no en el `_process` siguiente: el recentrado ocurre en el reloj de la
+## física y el barco pregunta la ola en ese mismo paso.
+func _al_recentrar(d: Vector3) -> void:
+	for i in _coef.size():
+		var di: Vector2 = _dirs[i]
+		var g: Vector4 = _grupo[i]
+		_fase_ola[i] = fposmod(_fase_ola[i] + _coef[i].x * (float(di.x) * d.x + float(di.y) * d.z), TAU)
+		_fase_grupo[i] = fposmod(_fase_grupo[i] + float(g.x) * d.x + float(g.y) * d.z, TAU)
+	_pivote -= Vector2(d.x, d.z)
 
 
 func _process(delta: float) -> void:
@@ -144,6 +185,8 @@ func _recalcular() -> void:
 	for p in PESOS:
 		suma_pesos += p
 	var n := LARGOS.size()
+	var dirs_antes := _dirs.duplicate()
+	var grupo_antes := _grupo.duplicate()
 	for i in n:
 		var largo: float = LARGOS[i]
 		var k_ola: float = TAU / largo
@@ -168,15 +211,82 @@ func _recalcular() -> void:
 		var d_g := _dirs[i].rotated(deg_to_rad(37.0))
 		_grupo[i] = Vector4(d_g.x * k_g, d_g.y * k_g,
 			k_g * 0.5 * sqrt(G / k_ola), HONDURA_GRUPO)
+	_girar_en_el_pivote(dirs_antes, grupo_antes)
+
+
+## Hace que el campo de olas role alrededor del BARCO y no del cero del mundo.
+##
+## La fase de un tren es `k·dir·p + φ`. Si `dir` cambia y φ no, todo punto a una distancia D del
+## cero corre su fase `k·D·Δángulo`: el mar entero gira alrededor del cero, y cuanto más lejos,
+## más deprisa barre. Con el cero en el puerto y el barco a 50 km eso es un mar resbalando a
+## cientos de metros por segundo, y basta el redondeo de `dir` en precisión simple (6·10⁻⁸) por
+## esos 50 km para que la ola tiemble milímetros bajo el casco cada frame.
+##
+## Así que a cada giro se corrige φ para que la fase EN EL PIVOTE no cambie:
+## `φ' = φ − k·(dir' − dir)·pivote`. El mar sigue rolando, pero alrededor de donde se mira, como
+## antes del origen flotante pasaba alrededor del barco porque el barco estaba junto al cero.
+##
+## Y la misma cuenta lleva el ruido del relieve fino y de la espuma, que se orienta con el viento:
+## lo que se acumula es el camino del pivote proyectado sobre el viento de cada instante, y el
+## shader dibuja el ruido relativo al pivote más eso (`ruido_ref`, `ruido_acum`).
+func _girar_en_el_pivote(dirs_antes: Array, grupo_antes: Array) -> void:
+	var piv := _pivote_actual()
+	var o := get_node_or_null("/root/Origen")
+	var ax: float = float(piv.x) + (o.x if o != null else 0.0)
+	var az: float = float(piv.y) + (o.z if o != null else 0.0)
+	if _con_pivote:
+		for i in _coef.size():
+			var a: Vector2 = dirs_antes[i]
+			var b: Vector2 = _dirs[i]
+			var ga: Vector4 = grupo_antes[i]
+			var gb: Vector4 = _grupo[i]
+			_fase_ola[i] = fposmod(_fase_ola[i] - _coef[i].x
+				* ((float(b.x) - float(a.x)) * piv.x + (float(b.y) - float(a.y)) * piv.y), TAU)
+			_fase_grupo[i] = fposmod(_fase_grupo[i]
+				- ((float(gb.x) - float(ga.x)) * piv.x + (float(gb.y) - float(ga.y)) * piv.y), TAU)
+		var v: Vector2 = _dirs[0]
+		var dx := ax - _pivote_x
+		var dz := az - _pivote_z
+		_ruido_v += dx * float(v.x) + dz * float(v.y)
+		_ruido_l += -dx * float(v.y) + dz * float(v.x)
+	_pivote = piv
+	_pivote_x = ax
+	_pivote_z = az
+	_con_pivote = true
+
+
+## El barco activo, o la cámara si no hay barco, en coordenadas locales.
+func _pivote_actual() -> Vector2:
+	if not is_inside_tree():
+		return _pivote
+	var b := get_tree().get_first_node_in_group("barco_activo") as Node3D
+	if b != null:
+		return Vector2(b.global_position.x, b.global_position.z)
+	var cam := get_viewport().get_camera_3d()
+	if cam != null:
+		return Vector2(cam.global_position.x, cam.global_position.z)
+	return _pivote
 
 
 ## Pone la mar al día con el viento de este instante, sin esperar la `inercia`.
 ##
 ## Para herramientas y pruebas: con 25 s de constante de tiempo, mirar cómo queda el mar con
 ## viento fuerte costaría dos minutos de espera por cada medida.
+##
+## Y pone a cero la fase acumulada (`_girar_en_el_pivote`), para que lo que se mide no dependa de
+## lo navegado antes: esa fase sale del camino del barco y de cada rolada, así que sin esto la
+## misma prueba veía otro trozo de mar según qué paquetes hubieran corrido delante — `mundo` /
+## "la cresta se aclara" cayó en un trozo de mar bajo (crestas de 0,27 m, tono 0,198 contra 0,2)
+## en la batería entera y daba 0,450 corrido solo. Con la fase a cero el mar es el mismo que había
+## antes del origen flotante. Es un salto del mar, pero esta función ya lo es.
 func asentar() -> void:
 	_fuerza_suave = Viento.fuerza
 	_eje = _rumbo_del_viento()
+	_fase_ola.fill(0.0)
+	_fase_grupo.fill(0.0)
+	_ruido_v = 0.0
+	_ruido_l = 0.0
+	_con_pivote = false
 	_recalcular()
 
 
@@ -190,7 +300,7 @@ func desplazamiento(p: Vector2, reloj := -1.0) -> Vector3:
 		if c.x <= 0.0 or c.y <= 0.0:
 			continue
 		var a: float = _amplitud(i, p, tt)
-		var f: float = c.x * _dirs[i].dot(p) - c.w * tt
+		var f: float = c.x * _dirs[i].dot(p) + _fase_ola[i] - c.w * tt
 		d.y += a * sin(f)
 		var lat: float = c.z * a * cos(f)
 		d.x += _dirs[i].x * lat
@@ -206,7 +316,7 @@ func normal(p: Vector2, reloj := -1.0) -> Vector3:
 		var c: Vector4 = _coef[i]
 		if c.x <= 0.0 or c.y <= 0.0:
 			continue
-		var f: float = c.x * _dirs[i].dot(p) - c.w * tt
+		var f: float = c.x * _dirs[i].dot(p) + _fase_ola[i] - c.w * tt
 		var ka: float = c.x * _amplitud(i, p, tt)
 		n.x -= _dirs[i].x * ka * cos(f)
 		n.z -= _dirs[i].y * ka * cos(f)
@@ -221,7 +331,8 @@ func _amplitud(i: int, p: Vector2, tt: float) -> float:
 	var g: Vector4 = _grupo[i]
 	if g.w <= 0.0:
 		return _coef[i].y
-	return _coef[i].y * (1.0 - g.w * (0.5 + 0.5 * sin(Vector2(g.x, g.y).dot(p) - g.z * tt)))
+	return _coef[i].y * (1.0 - g.w * (0.5 + 0.5 * sin(Vector2(g.x, g.y).dot(p) + _fase_grupo[i]
+		- g.z * tt)))
 
 
 ## Altura ABSOLUTA de la lámina de agua sobre el punto `q` del mundo (x,z), con `nivel` sumado.
@@ -249,6 +360,69 @@ func normal_en(q: Vector2, reloj := -1.0) -> Vector3:
 
 ## La ola más corta de la mar, en metros. Es la que decide cuánto hay que mallar el agua: si la
 ## celda no la resuelve, no se ve la mar sino un serrucho.
+## Pendiente cuadrática media que pide a la superficie el viento que ha levantado esta mar
+## (Cox y Munk, 1954: `0,003 + 0,00512·U`, U en m/s). Es la cifra que separa un mar de un
+## cristal, y el shader la reparte entre la ola, el detalle de la normal y la rugosidad.
+func pendiente_del_viento() -> float:
+	return 0.003 + 0.00512 * _fuerza_suave * Viento.velocidad_m_s
+
+
+## Viento que levantaría ESTA mar (Pierson-Moskowitz, mar hecha: `Hs = 0,21·U²/g`), en m/s.
+##
+## No es `Viento.velocidad_m_s`: la mar de este mundo está a propósito por debajo de su viento
+## —a 16 m/s una mar de verdad tendría 5,5 m, y aquí tiene 2—, y la espuma tiene que ir con la
+## mar que se VE. Con el viento nominal salía un 5 % de mar blanca con brisa y un 48 % con mar
+## dura, y se veía exagerado.
+func viento_de_la_mar() -> float:
+	return sqrt(maxf(altura, 0.0) * G / 0.21)
+
+
+## Fracción del mar cubierta de borreguillos (Monahan y O'Muircheartaigh, 1980:
+## `3,84·10⁻⁶ · U^3,41`, U en m/s), con el viento que levanta esta mar.
+func cobertura_espuma() -> float:
+	return clampf(3.84e-6 * pow(viento_de_la_mar(), 3.41), 1e-7, 0.5)
+
+
+## Cuánto ruido se suma a la cresta para romper la espuma, en desviaciones de lo que se pica.
+const ESPUMA_RUIDO := 1.0
+## Varianza de `n` en `agua_espuma()` (dos octavas de `ruido_d`), MEDIDA con la batería.
+const RUIDO_VALOR2 := 0.08
+## Qué parte de una mancha de espuma es blanca (el encaje deja huecos), MEDIDA con la batería.
+const ESPUMA_RELLENO := 0.33
+
+
+## Umbral, ancho de la transición y peso del ruido de la espuma (x, y, z) para que cubra
+## `cobertura_espuma()`.
+##
+## Lo que se compara en el shader es lo que se PICA la cresta, `Σ Q·k·A·sin`, más un ruido; una
+## suma de muchos senos de fase independiente es casi gaussiana, así que la fracción que pasa de
+## un umbral sale de su desviación y del cuantil normal. Los grupos hunden cada tren entre
+## `1` y `1 − HONDURA_GRUPO`, y eso le quita varianza: `E[(1 − h·s)²]` con s entre 0 y 1.
+func umbral_espuma() -> Vector3:
+	var s2 := 0.0
+	for c in _coef:
+		var j: float = c.z * c.x * c.y
+		s2 += 0.5 * j * j
+	var h := HONDURA_GRUPO
+	s2 *= 1.0 - h + h * h * 0.375
+	var ruido := ESPUMA_RUIDO * sqrt(s2)
+	var total := sqrt(s2 + ruido * ruido * RUIDO_VALOR2)
+	# La espuma es encaje: dentro de la mancha solo `ESPUMA_RELLENO` es blanco, así que la mancha
+	# tiene que cubrir más para que el blanco medio sea el que pide el viento.
+	var mancha := clampf(cobertura_espuma() / ESPUMA_RELLENO, 1e-7, 0.95)
+	return Vector3(total * _cuantil_normal(1.0 - mancha), 0.15 * total, ruido)
+
+
+## Inversa de la normal tipificada (Abramowitz y Stegun 26.2.23, error < 4,5·10⁻⁴).
+static func _cuantil_normal(p: float) -> float:
+	var q := p if p < 0.5 else 1.0 - p
+	var t := sqrt(-2.0 * log(maxf(q, 1e-12)))
+	var arriba := 2.515517 + 0.802853 * t + 0.010328 * t * t
+	var abajo := 1.0 + 1.432788 * t + 0.189269 * t * t + 0.001308 * t * t * t
+	var z := t - arriba / abajo
+	return z if p >= 0.5 else -z
+
+
 func longitud_mas_corta() -> float:
 	var l := INF
 	for x in LARGOS:
@@ -263,8 +437,25 @@ func longitud_mas_corta() -> float:
 func aplicar(mat: ShaderMaterial) -> void:
 	if mat == null:
 		return
-	mat.set_shader_parameter("ola_dir", _dirs)
-	mat.set_shader_parameter("ola_coef", _coef)
-	mat.set_shader_parameter("ola_grupo", _grupo)
+	# COPIAS empaquetadas, no los `Array`: un `Array` va por referencia, el material se queda con
+	# él y lo lee cuando dibuja, y aquí se reescribe en el sitio cada frame. Así el shader pintaba
+	# las direcciones del frame en que dibujaba con la fase del frame en que se le aplicó: con el
+	# barco a 1,4 km del cero local y el shader tardando 0,23 s en compilarse, 12-20 cm de ola de
+	# diferencia en el espejo (paquete `origen`).
+	mat.set_shader_parameter("ola_dir", PackedVector2Array(_dirs))
+	mat.set_shader_parameter("ola_coef", PackedVector4Array(_coef))
+	mat.set_shader_parameter("ola_grupo", PackedVector4Array(_grupo))
+	var fases := PackedVector2Array()
+	for i in _coef.size():
+		fases.append(Vector2(_fase_ola[i], _fase_grupo[i]))
+	mat.set_shader_parameter("ola_fase", fases)
+	mat.set_shader_parameter("ruido_ref", _pivote)
+	mat.set_shader_parameter("ruido_acum", Vector2(_ruido_v, _ruido_l))
 	mat.set_shader_parameter("ola_t", t)
 	mat.set_shader_parameter("ola_alcance", alcances)
+	mat.set_shader_parameter("ola_altura", altura)
+	mat.set_shader_parameter("pendiente_viento", pendiente_del_viento())
+	var esp := umbral_espuma()
+	mat.set_shader_parameter("espuma_umbral", esp.x)
+	mat.set_shader_parameter("espuma_ancho", esp.y)
+	mat.set_shader_parameter("espuma_ruido", esp.z)

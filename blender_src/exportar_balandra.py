@@ -28,8 +28,9 @@ Las tres trampas, todas silenciosas:
    Verificado: sin excluirlas el `.glb` trae 124 mallas y 147 primitivas contra las 121 y 139
    de producción.
 
-La armadura tiene 7 huesos en Blender y el `.glb` trae 8: el exportador de glTF añade uno.
-No es un fallo, es lo esperado — 8 es el número bueno.
+La armadura tiene 8 huesos en Blender y el `.glb` trae 9: el exportador de glTF añade uno
+(`neutral_bone`). No es un fallo, es lo esperado — 9 es el número bueno. (Era 7→8 hasta que se
+añadió `collar_pico`, el hueso que desliza el collar de la garganta sin bascular con el pico.)
 """
 
 import os
@@ -110,7 +111,7 @@ def exportar(ruta: str = "") -> dict:
 # Recuento de producción, medido sobre el .glb del 9 de septiembre de 2026 y reproducido por
 # `exportar()`. Cuidado al contar mallas: hay NOMBRES REPETIDOS, así que un dict indexado por
 # nombre da 121 en lugar de 124 y parece que faltan tres.
-ESPERADO = {"mallas": 124, "primitivas": 139, "nodos": 133, "huesos": 8, "materiales": 15}
+ESPERADO = {"mallas": 124, "primitivas": 139, "nodos": 134, "huesos": 9, "materiales": 15}
 
 
 def comprobar(ruta: str = "", esperado: dict = None) -> dict:

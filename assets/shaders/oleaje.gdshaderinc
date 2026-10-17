@@ -25,6 +25,18 @@ uniform vec2 ola_dir[OLEAJE_N];    // hacia dónde viaja cada tren, unitaria
 // verdad, donde las olas llegan en grupos.
 uniform vec4 ola_grupo[OLEAJE_N];
 uniform vec4 ola_coef[OLEAJE_N];   // x = k (rad/m), y = amplitud (m), z = Q, w = omega (rad/s)
+// Fase añadida de cada tren: x = la de la ola, y = la de su grupo, en radianes y reducida a una
+// vuelta. La lleva `Oleaje` en doble precisión, y es lo que hace que la ola siga en su sitio
+// ABSOLUTO cuando el origen flotante recentra el mundo, y que el mar role alrededor del barco y no
+// del cero (ver `Oleaje._girar_en_el_pivote()`). Sumar el origen aquí, en precisión simple, daría
+// fases de decenas de miles de radianes con pasos de milésimas. Sin poner valen cero.
+uniform vec2 ola_fase[OLEAJE_N];
+// El ruido del relieve fino y de la espuma, con la misma idea: se dibuja relativo a `ruido_ref`
+// (el barco, en coordenadas locales) más `ruido_acum`, el camino que ha hecho el barco en absoluto
+// proyectado sobre el viento (x) y su perpendicular (y). Así no salta al recentrar ni barre al rolar
+// el viento, por lejos del cero que se navegue.
+uniform vec2 ruido_ref = vec2(0.0);
+uniform vec2 ruido_acum = vec2(0.0);
 uniform float ola_t = 0.0;         // reloj del oleaje: lo empuja `Oleaje`, no es TIME
 // Entre qué distancias de la cámara se APAGA cada tren, en metros (x = empieza, y = acabada).
 // Es el LOD del oleaje: una ola de 7 m sobre celdas de 3 no se dibuja, se convierte en un
@@ -51,7 +63,7 @@ float oleaje_amp(int i, vec2 p, float dist) {
 	float a = ola_coef[i].y;
 	vec4 g = ola_grupo[i];
 	if (g.w > 0.0) {
-		a *= 1.0 - g.w * (0.5 + 0.5 * sin(dot(g.xy, p) - g.z * ola_t));
+		a *= 1.0 - g.w * (0.5 + 0.5 * sin(dot(g.xy, p) + ola_fase[i].y - g.z * ola_t));
 	}
 	vec2 alc = ola_alcance[i];
 	if (alc.y <= 0.0) {
@@ -71,7 +83,7 @@ vec3 oleaje_desplaz_lod(vec2 p, float dist) {
 		if (k <= 0.0 || a <= 0.0) {
 			continue;
 		}
-		float f = k * dot(ola_dir[i], p) - ola_coef[i].w * ola_t;
+		float f = k * dot(ola_dir[i], p) + ola_fase[i].x - ola_coef[i].w * ola_t;
 		d.y += a * sin(f);
 		d.xz += ola_dir[i] * (ola_coef[i].z * a * cos(f));
 	}
@@ -96,7 +108,7 @@ vec3 oleaje_normal_lod(vec2 p, float dist) {
 		if (k <= 0.0 || a <= 0.0) {
 			continue;
 		}
-		float f = k * dot(ola_dir[i], p) - ola_coef[i].w * ola_t;
+		float f = k * dot(ola_dir[i], p) + ola_fase[i].x - ola_coef[i].w * ola_t;
 		n.xz -= ola_dir[i] * (k * a * cos(f));
 		n.y -= ola_coef[i].z * k * a * sin(f);
 	}
@@ -120,7 +132,7 @@ float oleaje_pico(vec2 p, float dist) {
 		if (k <= 0.0 || a <= 0.0) {
 			continue;
 		}
-		float f = k * dot(ola_dir[i], p) - ola_coef[i].w * ola_t;
+		float f = k * dot(ola_dir[i], p) + ola_fase[i].x - ola_coef[i].w * ola_t;
 		j += ola_coef[i].z * k * a * sin(f);
 	}
 	return clamp(j, 0.0, 1.0);

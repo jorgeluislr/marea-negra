@@ -33,6 +33,19 @@ var _anterior := Vector3.ZERO
 var _viva := true
 
 
+func _ready() -> void:
+	var o := get_node_or_null("/root/Origen")
+	if o != null:
+		o.recentrado.connect(_al_recentrar)
+
+
+## El mundo se ha corrido `-d` (origen flotante). La bala vuela por su fórmula desde `_p0`, no
+## desde donde está su nodo, así que hay que correr también eso o volvería a donde estaba.
+func _al_recentrar(d: Vector3) -> void:
+	_p0 -= d
+	_anterior -= d
+
+
 ## Lanza la bala. Se llama antes de meterla en el árbol o justo después; el vuelo empieza a
 ## contar desde aquí.
 func lanzar(desde: Vector3, velocidad: Vector3, mar := 0.0) -> void:

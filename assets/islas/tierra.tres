@@ -1,0 +1,21 @@
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://assets/shaders/tierra.gdshader" id="1_v8tpl"]
+[ext_resource type="Texture2D" path="res://assets/islas/texturas/arena.tres" id="2_axgxt"]
+[ext_resource type="Texture2D" path="res://assets/islas/texturas/hierba.tres" id="3_ehjof"]
+[ext_resource type="Texture2D" path="res://assets/islas/texturas/roca.tres" id="4_348xq"]
+
+[resource]
+render_priority = 0
+shader = ExtResource("1_v8tpl")
+shader_parameter/arena = ExtResource("2_axgxt")
+shader_parameter/hierba = ExtResource("3_ehjof")
+shader_parameter/roca = ExtResource("4_348xq")
+shader_parameter/rep_arena = 0.35
+shader_parameter/rep_hierba = 0.18
+shader_parameter/rep_roca = 0.12
+shader_parameter/cota_arena = 1.8
+shader_parameter/pendiente_roca = 0.3
+shader_parameter/tinte_mojado = Vector3(0.55, 0.5, 0.42)
+shader_parameter/nivel_agua = 0.0
+shader_parameter/radio_tierra = 6371000.0

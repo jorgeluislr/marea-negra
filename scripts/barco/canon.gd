@@ -42,6 +42,14 @@ const RUEDAS := [Vector3(-0.0926, 0.0, 0.2873), Vector3(-0.0926, 0.0, -0.2873),
 const EJE_ANIMA_SOBRE_CENTRO := EJE_ANIMA_SOBRE_SUELO - ALTO * 0.5
 const BOCA_LOCAL := Vector3(-LARGO * 0.5, EJE_ANIMA_SOBRE_CENTRO, 0.0)
 
+## Carrera de la cuña y del espeque, en grados. Viven en la PIEZA porque es el afuste el que las
+## limita: el barco topa con ellas la puntería fina y el capitán de IA las usa para saber hasta
+## dónde llega su montaje. Escritas en tres sitios, bastaba con cambiar una para que el capitán
+## creyese un alcance que la pieza no tiene.
+const ELEVACION_MIN := -3.0
+const ELEVACION_MAX := 12.0
+const ESPEQUE_MAX := 15.0
+
 @export_file("*.glb", "*.tscn") var modelo := "res://assets/models/canon.glb"
 ## +1 tira a estribor (+X del barco), −1 a babor. La proa mira a −Z, así que estribor es +X.
 @export var lado := 1.0
@@ -139,6 +147,21 @@ func punto_de_caida() -> Vector3:
 	if t <= 0.0:
 		return p0
 	return Bala.punto(p0, v0, t)
+
+
+## A qué distancia cae el tiro con una cuña dada, en metros medidos en horizontal desde la boca.
+##
+## Se le pregunta a la PIEZA y ella se devuelve la cuña que tenía. Es la misma cuenta que vuela
+## la bala, así que no puede discrepar de ella, y ahorra a quien pregunta el baile de poner,
+## medir y restaurar — que es donde uno se olvida de restaurar y deja la batería apuntando al
+## cielo.
+func alcance_a(grados: float) -> float:
+	var e0 := elevacion
+	elevacion = clampf(grados, ELEVACION_MIN, ELEVACION_MAX)
+	var p0 := boca_global()
+	var cae := punto_de_caida()
+	elevacion = e0
+	return Vector2(cae.x - p0.x, cae.z - p0.z).length()
 
 
 ## La parábola muestreada, para dibujarla. Mismo cálculo que el vuelo de la bala.
@@ -271,9 +294,6 @@ func _montar_modelo() -> void:
 	m.name = "Modelo"
 	if lado > 0.0:
 		m.rotation.y = PI
-	# La elevación gira el tubo sobre su eje transversal. El signo depende de la banda porque
-	# la pieza de estribor está media vuelta girada: sin esto, una apuntaría al cielo y la otra
-	# al agua.
 	add_child(m)
 	_modelo = m
 	_curena = m.find_child("canon_curena", true, false) as Node3D
@@ -324,14 +344,31 @@ const EJE_MUNON := Vector3(0.0305, 0.0, 0.1315)
 
 ## Lleva la puntería al modelo: el giro lateral a la pieza entera, la elevación solo al tubo.
 ##
-## El signo de la elevación depende de la banda porque la de estribor va con el modelo girado
-## media vuelta: sin distinguirlo, una pieza apuntaría al cielo y la otra al agua.
+## **Ninguno de los dos signos depende de la banda**, y los dos lo hacían. La media vuelta que
+## lleva el modelo de estribor es un giro sobre Y, y un giro sobre Y **no toca la componente
+## vertical**: la elevación sale igual con el modelo girado y sin girar. Compensarla por banda
+## era invertirla, no corregirla.
 func _aplicar_punteria() -> void:
-	rotation.y = deg_to_rad(giro_lateral) * (-1.0 if lado > 0.0 else 1.0)
+	# El giro lateral NO depende de la banda, y esto costó un rato de ver: llevaba el mismo signo
+	# que la elevación y con eso las dos bandas giraban hacia POPA a la vez, que es consistente
+	# mirando el barco desde fuera pero al revés para quien apunta. Medido con
+	# `tools/apunte_por_banda.tscn`: con el espeque a +10°, la pieza de estribor se iba 0,174 a
+	# la derecha del artillero y la de babor 0,174 a su IZQUIERDA. El jugador lo notaba como que
+	# el ratón apuntaba bien por una banda y al revés por la otra.
+	#
+	# Con un solo signo, `giro_lateral` positivo es siempre "a la derecha de quien mira por el
+	# ánima", y la regla vale igual para las piezas de proa y de popa que vengan después.
+	rotation.y = -deg_to_rad(giro_lateral)
 	if _tubo == null:
 		return
-	var signo := -1.0 if lado > 0.0 else 1.0
-	_tubo.transform.basis = _reposo_tubo * Basis(Vector3.BACK, deg_to_rad(elevacion) * signo)
+	# Y la elevación, lo mismo, arreglado el 13 de septiembre de 2026: `giro_lateral` se corrigió
+	# el 12 y esta se quedó con el signo por banda. Medido con `tools/alza_por_banda.tscn`, con el
+	# casco ADRIZADO —si no, la escora inclina las dos bandas en sentidos contrarios y la tabla no
+	# se puede leer—: con la cuña a +8°, estribor subía el ánima 8,00° y babor la BAJABA 8,00°.
+	#
+	# Es también, y esto no era evidente, la causa de que el barco tirase más lejos por estribor:
+	# con la misma orden de puntería una banda alargaba a 355 m y la otra se acortaba a 13.
+	_tubo.transform.basis = _reposo_tubo * Basis(Vector3.BACK, -deg_to_rad(elevacion))
 
 
 ## Dónde están las cuatro ruedas, en el mundo. Lo resuelve la pieza y no quien pregunta, porque

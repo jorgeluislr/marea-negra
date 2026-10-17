@@ -1,0 +1,22 @@
+[gd_resource type="Resource" script_class="Carta" format=3]
+
+[ext_resource type="Script" path="res://scripts/mapa/carta.gd" id="1"]
+[ext_resource type="Texture2D" path="res://assets/mapa/carta_caribe.png" id="2"]
+[ext_resource type="Texture2D" path="res://assets/mapa/papel_carta.png" id="3"]
+[ext_resource type="Texture2D" path="res://assets/mapa/rosa_vientos.png" id="4"]
+[ext_resource type="ArrayMesh" path="res://assets/mapa/costas_carta.res" id="5"]
+
+; El marco es la imagen de Meshy (fuentes/crudo/referencias/Meshy_AI_2552...png, 1024 px)
+; recortada al pergamino por tools/medir_carta.tscn, que también MIDE rect_interior: la línea
+; interior del marco, x 105..832 e y 107..834. Su interior no se usa.
+; El papel es una baldosa propia de Meshy (fuentes/crudo/referencias/Meshy_AI_a1fa...png, 1024 px)
+; con los bordes fundidos por tools/hacer_papel.tscn para que empalme. La rosa sale de la imagen
+; del marco por tools/recortar_rosa.tscn (centro 280, 660, radio 145, afinados por la herramienta).
+[resource]
+script = ExtResource("1")
+marco = ExtResource("2")
+rect_interior = Rect2(105, 107, 727, 727)
+papel = ExtResource("3")
+rosa = ExtResource("4")
+costas = ExtResource("5")
+papel_metros = 4000.0

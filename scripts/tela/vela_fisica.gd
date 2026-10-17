@@ -107,6 +107,13 @@ func _antes_de_pose(delta: float) -> void:
 		aparejo.paso(delta)
 
 
+## El marco del paso anterior va en coordenadas de mundo: si no se corre con el recentrado, el
+## arrastre de abajo leería un salto de kilómetros y se llevaría el paño entero con él.
+func _al_recentrar(d: Vector3) -> void:
+	super(d)
+	_marco_ant.origin -= d
+
+
 ## Se recoge o se despliega según lo que haya recorrido la driza, y el paño VIAJA con el marco.
 func _tras_pose(_delta: float, mats: Array[Transform3D]) -> void:
 	_arriado = aparejo.arriado_medido() if aparejo != null else 0.0

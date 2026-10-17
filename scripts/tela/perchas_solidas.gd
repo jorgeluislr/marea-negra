@@ -1,6 +1,6 @@
 extends Node3D
-## Da cuerpo de colisión a las perchas y al estay, para que el paño de las velas se apoye en
-## ellos en vez de atravesarlos.
+## Da cuerpo de colisión a los PALOS y a la JARCIA: para que el paño de las velas se apoye en
+## ellos en vez de atravesarlos, y para que el personaje tampoco los atraviese.
 ##
 ## Sin esto, el paño libre pasa de largo: en la mayor el pujamen y el gratil cuelgan por debajo
 ## de la botavara y del pico entre aro y aro y sale una sierra de picos, y el paño puede envolver
@@ -38,10 +38,48 @@ extends Node3D
 ## el colisionador sigue su hueso cada frame. El eje y el radio se miden de la propia malla al
 ## arrancar, así que esto vale para cualquier barco sin números a mano.
 ##
-## Va en su propia capa de colisión: las velas la llevan en su `collision_mask` y nada más
-## choca con ella, para que el personaje no se quede enganchado en la botavara.
+## **TRES capas, y cada una responde a una pregunta distinta.** La 5 es la de los palos y solo la
+## miran las velas que la pidan; la 6 es la de la jarcia, aparte de la anterior para que una vela
+## pueda apoyarse en los obenques sin tragarse las cápsulas de las perchas (la mayor tiene
+## `capa_perchas = 0` porque la cápsula de la botavara le hacía un ángulo a lo largo del pujamen);
+## y la 3, la de cubierta, va en TODOS los cuerpos porque es la que enmascara el personaje. Sin
+## esa tercera, el jugador cruzaba el mástil, la botavara y los obenques como si fueran humo.
+##
+## La JARCIA —seis obenques y veintiséis flechastes en esta balandra— se describe por PATRONES de
+## nombre y con UNA cápsula por pieza: un cabo es recto y no tiene el cono de un palo, así que
+## ocho tramos serían 256 formas para nada.
+##
+## Lo que la jarcia sólida NO arregla es que la lona se apoye en ella: probado dándole capa propia
+## y máscara a la mayor, el paño pasado de los obenques se quedó en 476 puntos contra 475 sin
+## colisión (`tools/vela_en_obenques.tscn`), porque esta malla tiene 25 cm de arista y el cabo
+## 1,5 cm de radio: los puntos pasan ENTRE las cápsulas. Topar la percha (`Aparejo.trimado_jarcia`)
+## para el PLANO de la vela, pero no su barriga.
+##
+## **Para la barriga, cada obenque lleva detrás un MURO para la lona** (`jarcia_lona`): una cápsula
+## gruesa, de radio comparable a la arista del paño para que ningún par de vértices pueda quedar a
+## caballo del cabo, DESPLAZADA hacia el lado contrario a la vela hasta que su cara de popa queda a
+## ras de la del cabo. La lona se apoya justo en la cuerda y todo el grosor queda escondido detrás.
+## La idea es del usuario.
+##
+## El lado sale de la geometría y no de un número: la vela y los obenques cuelgan del mismo palo,
+## así que el paño llega al cabo girando alrededor del eje del mástil, y el muro va en la tangente
+## de ese giro, hacia proa — en el obenque de popa de esta balandra, a 68,5°, eso es 93 % proa y
+## 37 % hacia fuera. Una recta tangente deja la circunferencia entera a un lado, así que el muro
+## queda todo él a proa del plano radial del cabo y no puede tragarse ningún ancla de la vela, que
+## está toda a popa de ese plano. Va en su propia capa, que solo mira la lona: el personaje sigue
+## chocando con el cabo fino de siempre y puede trepar.
 
 @export var perchas: Array[String] = ["mastil_v3", "botavara", "pico", "estay_proa"]
+## JARCIA: los cabos por los que se trepa y en los que topa la lona. Son patrones de nombre, no
+## nombres exactos, porque son muchos y numerados (seis obenques y veintiséis flechastes).
+##
+## Van con UN tramo y no ocho: un cabo es recto y no tiene el cono de un palo, así que una
+## cápsula lo describe entera. Con ocho, estas treinta y dos piezas costarían 256 formas.
+@export var jarcia: Array[String] = ["obenque_*", "flechaste_*"]
+## De la jarcia, cuáles son PELDANOS: se describen con una caja y no con una cápsula, porque lo
+## que se pisa tiene que tener cara plana arriba. Sobre un cilindro de 1,7 cm de radio el
+## personaje resbala, y con `is_on_floor()` en falso no puede ni saltar al siguiente.
+@export var jarcia_peldanos: Array[String] = ["flechaste_*"]
 ## Se SUMA al radio medido de cada tramo. En negativo mete la cápsula dentro del palo, que es
 ## lo que hace falta para que las costuras de las velas —que están cosidas a la superficie— no
 ## queden atrapadas. Con el +0,01 que tenía, la mayor metía 13 anclajes en la botavara.
@@ -56,6 +94,35 @@ extends Node3D
 ## t = +0,66 y la bandera se lleva su propio tramo, de 46 mm.
 @export_range(1, 16) var tramos := 8
 @export_flags_3d_physics var capa := 16   ## Capa 5, solo para las velas.
+## Capa 6, la de la JARCIA. Va aparte de la 5 para que una vela pueda apoyarse en los obenques
+## sin tragarse las cápsulas de los palos: la mayor tiene `capa_perchas = 0` precisamente porque
+## la cápsula de la botavara le hacía un ángulo a lo largo del pujamen.
+@export_flags_3d_physics var capa_jarcia := 32
+## Capa 3, la de cubierta, que es la que enmascara el personaje. Se SUMA a la capa de tela en
+## todos los cuerpos: sin ella el jugador atraviesa el mástil, la botavara y los obenques como
+## si no estuvieran, porque la capa 5 no la mira nadie más que la lona.
+@export_flags_3d_physics var capa_personaje := 4
+@export_group("Muro para la lona")
+## Cabos que llevan detrás un muro en el que se apoya la lona. Patrones de nombre, como `jarcia`.
+## Vacío = ningún muro.
+@export var jarcia_lona: Array[String] = ["obenque_*"]
+## El palo del que cuelgan la vela y esos cabos: su eje es el giro con el que la lona llega a ellos.
+@export var palo_lona := "mastil_v3"
+## Radio del muro. Tiene que pasar de media arista del paño (12,5 cm en la mayor): si no, un
+## vértice a cada lado del cabo y la cara entre los dos lo deja dentro. Barrido con
+## `tools/vela_en_obenques.tscn`, caras del paño que el obenque atraviesa de 120° a 170° de viento:
+##   2 cm → 2-4 (es el cabo fino de siempre, y da lo mismo que sin muro)
+##   8 cm → 2-4      12 cm → 0-8      15 cm → 0      20 cm → 0
+## Va en 20 y no en 15 porque el umbral cae entre 12 y 15, y un valor pegado al umbral es como
+## nace una prueba intermitente. En ningún radio quedó un ancla dentro ni subió el estiramiento.
+## OJO con ese barrido: se hizo con el fallo de la caja del `SoftBody` sin arreglar (ver
+## `TelaFisica._vigilar_caja`), y repetido el 17-10-2026 el primer rumbo que llega al obenque
+## (120°, estribor) da con 20 cm EXACTAMENTE lo mismo que con 2. Los ceros eran de los rumbos en
+## que la caja se había rehecho por casualidad.
+@export_range(0.02, 0.6) var radio_lona := 0.20
+## Capa 7, la de los muros. Solo la mira la vela que la ponga en su `capa_perchas`.
+@export_flags_3d_physics var capa_lona := 64
+@export_group("")
 
 var _barco: Node3D
 var _skel: Skeleton3D
@@ -94,11 +161,31 @@ func _montar() -> void:
 		return
 	_skel = es[0] as Skeleton3D
 	var hechas: Array[String] = []
+	var cabos := 0
+	var radio_cabo := 0.0
+	var muros := 0
+	# El eje del palo de la lona se mide al pasar por él, que va en `perchas` y por tanto antes que
+	# la jarcia. La proa, en ejes del esqueleto: la del barco es −Z.
+	var palo_c := Vector3.ZERO
+	var palo_eje := Vector3.ZERO
+	var hacia_proa := _relativo(_skel, _barco).basis.inverse() * Vector3(0, 0, -1)
+	var lista := []
 	for nombre in perchas:
-		var l := _barco.find_children(nombre, "MeshInstance3D", true, false)
-		if l.is_empty():
-			continue
-		var mi := l[0] as MeshInstance3D
+		for n in _barco.find_children(nombre, "MeshInstance3D", true, false):
+			lista.append([n, tramos, capa | capa_personaje, false])
+	for nombre in jarcia:
+		var peldano := false
+		for patron in jarcia_peldanos:
+			if nombre.matchn(patron) or patron.matchn(nombre):
+				peldano = true
+		for n in _barco.find_children(nombre, "MeshInstance3D", true, false):
+			lista.append([n, 1, capa_jarcia | capa_personaje, peldano])
+	for entrada in lista:
+		var mi := entrada[0] as MeshInstance3D
+		var tramos_p: int = entrada[1]
+		var capa_p: int = entrada[2]
+		var peldano: bool = entrada[3]
+		var nombre: String = mi.name
 		if mi.mesh == null:
 			continue
 		var tr := _relativo(mi, _skel)
@@ -141,6 +228,9 @@ func _montar() -> void:
 			t_max = maxf(t_max, t)
 			radio = maxf(radio, (q - eje * t).length())
 		var largo := t_max - t_min
+		if nombre.matchn(palo_lona):
+			palo_c = c
+			palo_eje = eje
 		# Hueso que la mueve: el de mayor peso de toda la malla.
 		var suma := {}
 		if hu.size() >= vs.size() * 4:
@@ -159,31 +249,31 @@ func _montar() -> void:
 		# Radio máximo por TRAMO a lo largo del eje: es lo que permite seguir el cono del palo.
 		var radios := []
 		var cuentas := []
-		for _k in tramos:
+		for _k in tramos_p:
 			radios.append(0.0)
 			cuentas.append(0)
 		for v in vs:
 			var q := (tr * v) - c
 			var t: float = q.dot(eje)
 			var f: float = clampf((t - t_min) / maxf(largo, 1e-6), 0.0, 0.99999)
-			var k := int(f * tramos)
+			var k := int(f * tramos_p)
 			radios[k] = maxf(radios[k], (q - eje * t).length())
 			cuentas[k] += 1
 		# Los tramos sin vértices heredan del vecino con datos, o la cápsula saldría de radio 0.
-		for k in tramos:
+		for k in tramos_p:
 			if cuentas[k] == 0:
 				var j := k
 				while j >= 0 and cuentas[j] == 0:
 					j -= 1
 				if j < 0:
 					j = k
-					while j < tramos and cuentas[j] == 0:
+					while j < tramos_p and cuentas[j] == 0:
 						j += 1
-				radios[k] = radios[j] if j >= 0 and j < tramos else radio
+				radios[k] = radios[j] if j >= 0 and j < tramos_p else radio
 
 		var cuerpo := StaticBody3D.new()
 		cuerpo.name = "Percha_" + nombre
-		cuerpo.collision_layer = capa
+		cuerpo.collision_layer = capa_p
 		cuerpo.collision_mask = 0
 		# La cápsula de Godot va a lo largo de SU eje Y: hay que orientarla al eje de la percha.
 		var y := eje.normalized()
@@ -192,27 +282,92 @@ func _montar() -> void:
 			x = y.cross(Vector3.RIGHT)
 		x = x.normalized()
 		var base := Basis(x, y, x.cross(y))
-		var largo_tramo := largo / float(tramos)
+		var largo_tramo := largo / float(tramos_p)
 		var rs := []
-		for k in tramos:
-			var cap := CapsuleShape3D.new()
-			cap.radius = maxf(radios[k] + margen, 0.004)
-			cap.height = maxf(largo_tramo, cap.radius * 2.0 + 0.002)
+		for k in tramos_p:
+			var r: float = maxf(radios[k] + margen, 0.004)
+			var alto_tramo: float = maxf(largo_tramo, r * 2.0 + 0.002)
 			var cs := CollisionShape3D.new()
-			cs.shape = cap
+			if peldano:
+				# Un peldano se PISA: caja, con su cara de arriba plana. La cápsula de Godot va a
+				# lo largo de su Y y la caja también aquí, así que la orientación es la misma.
+				var cja := BoxShape3D.new()
+				cja.size = Vector3(r * 2.0, alto_tramo, r * 2.0)
+				cs.shape = cja
+			else:
+				var cap := CapsuleShape3D.new()
+				cap.radius = r
+				cap.height = alto_tramo
+				cs.shape = cap
 			cs.name = "T%d" % k
 			var centro_t: float = t_min + largo_tramo * (float(k) + 0.5)
 			cs.transform = Transform3D(base, eje * centro_t)
 			cuerpo.add_child(cs)
-			rs.append("%.3f" % cap.radius)
+			rs.append("%.3f" % r)
 		_skel.add_child(cuerpo)
 		cuerpo.transform = Transform3D(Basis(), c)
 		_cuerpos.append(cuerpo)
 		_huesos.append(mejor)
 		_reposos.append(Transform3D(Basis(), c))
-		hechas.append("%s(r=%s l=%.2f h=%s)" % [nombre, "/".join(rs), largo,
-			_skel.get_bone_name(mejor) if mejor >= 0 else "-"])
-	print("perchas_solidas: %s" % ", ".join(hechas))
+		if tramos_p == 1:
+			cabos += 1
+			radio_cabo = maxf(radio_cabo, float(rs[0]))
+			if palo_eje != Vector3.ZERO and _es_lona(nombre):
+				_muro_lona(nombre, c, eje, radio, t_min, t_max, mejor, palo_c, palo_eje, hacia_proa)
+				muros += 1
+		else:
+			hechas.append("%s(r=%s l=%.2f h=%s)" % [nombre, "/".join(rs), largo,
+				_skel.get_bone_name(mejor) if mejor >= 0 else "-"])
+	# La jarcia se cuenta y no se detalla: son 32 cabos y el detalle tapaba todo lo demás.
+	print("perchas_solidas: %s%s%s" % [", ".join(hechas),
+		", y %d cabos de jarcia (radio hasta %.3f)" % [cabos, radio_cabo] if cabos > 0 else "",
+		", %d con muro para la lona (radio %.3f)" % [muros, radio_lona] if muros > 0 else ""])
+
+
+func _es_lona(nombre: String) -> bool:
+	for patron in jarcia_lona:
+		if nombre.matchn(patron):
+			return true
+	return false
+
+
+## El muro en que se apoya la lona detrás de un cabo: una cápsula de `radio_lona` a lo largo del
+## cabo, corrida hacia proa en la tangente del giro alrededor del palo hasta que su cara de popa
+## queda a ras de la del cabo. Todo en ejes del esqueleto, como el resto de cuerpos.
+func _muro_lona(nombre: String, c: Vector3, eje: Vector3, radio: float, t_min: float,
+		t_max: float, hueso: int, palo_c: Vector3, palo_eje: Vector3, hacia_proa: Vector3) -> void:
+	# Del eje del palo al cabo. El obenque va en un plano que contiene ese eje, así que el centro
+	# del cabo da la misma dirección que cualquier otro punto suyo.
+	var radial := (c - palo_c) - palo_eje * (c - palo_c).dot(palo_eje)
+	var n := palo_eje.cross(radial)
+	n -= eje * n.dot(eje)
+	if n.length() < 1e-6:
+		return
+	n = n.normalized()
+	# La lona de una cangreja va a popa del palo, así que la tangente que se aleja de ella es la que
+	# apunta a proa — en cualquier obenque, sea cual sea su azimut.
+	if n.dot(hacia_proa) < 0.0:
+		n = -n
+	var centro := c + n * (radio_lona - radio)
+	var y := eje.normalized()
+	var x := y.cross(n).normalized()
+	var cap := CapsuleShape3D.new()
+	cap.radius = radio_lona
+	cap.height = maxf(t_max - t_min, radio_lona * 2.0 + 0.002)
+	var cs := CollisionShape3D.new()
+	cs.name = "Muro"
+	cs.shape = cap
+	cs.transform = Transform3D(Basis(x, y, x.cross(y)), y * (t_min + t_max) * 0.5)
+	var cuerpo := StaticBody3D.new()
+	cuerpo.name = "Lona_" + nombre
+	cuerpo.collision_layer = capa_lona
+	cuerpo.collision_mask = 0
+	cuerpo.add_child(cs)
+	_skel.add_child(cuerpo)
+	cuerpo.transform = Transform3D(Basis(), centro)
+	_cuerpos.append(cuerpo)
+	_huesos.append(hueso)
+	_reposos.append(Transform3D(Basis(), centro))
 
 
 func _process(_delta: float) -> void:

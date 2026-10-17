@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/medir_carta.gd" id="1"]
+
+[node name="MedirCarta" type="Node"]
+script = ExtResource("1")

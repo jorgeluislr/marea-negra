@@ -173,3 +173,72 @@ def comprobar():
             "hombros_casaca": round(float(np.ptp(hombros[:, 0])), 3),
             "mano": round(float(np.ptp(w("mano_izq")[:, 2])), 3),
             "cana_bota": round(float(np.ptp(w("bota_izq")[:, 2])), 3)}
+
+
+# ============================================================ dimensiones reales
+#
+# 12 septiembre 2026. Las medidas de arriba dimensionaban cada pieza por separado y
+# el conjunto salía desproporcionado. Ahora TODO se deriva de la antropometría de un
+# varón de 1,80 m — la estatura la fija la cámara del juego — y se verifica midiendo.
+#
+# LA CABEZA NO SE ESCALA POR SU CAJA: esa caja incluye las trenzas, que cuelgan hasta
+# el pecho y valen tanto como la cabeza. Se escala por las MARCAS faciales, que dan
+# medidas antropométricas reales. Ocho medidas independientes pidieron factores entre
+# 1,042 y 1,153 (mediana 1,117): que coincidan a ±5 % es lo que dice que el rostro
+# está proporcionado como uno real y que basta un factor único. Si se hubieran ido
+# cada una por su lado, el rostro sería estilizado y no habría escala que lo arreglara.
+ANTROPOMETRIA = {           # varón de 1,80 m, en metros
+    "estatura":              1.800,
+    "altura de los ojos":    1.680,
+    "cabeza (coronilla-mentón)": 0.238,
+    "intercantal":           0.033,
+    "interpupilar":          0.064,
+    "fisura palpebral":      0.031,
+    "anchura de la nariz":   0.035,
+    "anchura de la boca":    0.053,
+    "anchura entre orejas":  0.152,
+    "cintura":               1.080,
+    "tobillo":               0.070,
+    "pie con bota":          0.285,
+    "mano":                  0.190,
+    "tricornio":             0.410,
+}
+
+# EL BUSTO NO SE USA. Se trajo para que pusiera el cuello, y sobra: la pieza de la
+# cabeza trae cuello propio y las trenzas cubren los lados. Peor aún, su torso va
+# 10 cm POR DELANTE de la camisa —es un busto escultórico, proyectado hacia adelante—
+# así que el pecho desnudo asomaba por el escote, y recortarlo dejaba a la vista el
+# canto abierto del corte cruzando la casaca. Queda en el .blend, oculto, por si algún
+# día hace falta un cuello con clavículas.
+
+# LA CABEZA SE CENTRA EN PROFUNDIDAD POR EL TRAGO, NUNCA POR SU CAJA. Centrando la
+# caja —que las trenzas alargan hacia atrás— la cara quedaba 15 cm por delante del
+# cuerpo: el trago en y = -0,150 con el torso centrado en +0,031. La referencia buena
+# es que el trago de la oreja cae casi sobre el hombro; puesto así, la punta de la
+# nariz queda a -0,122 contra un pecho a -0,115, que es como se ve un perfil humano.
+
+
+def verificar():
+    """Contrasta el montaje con ANTROPOMETRIA. Devuelve el error de cada medida, en mm."""
+    import numpy as np
+    P = {o.name[2:]: np.array(o.matrix_world.translation)
+         for o in bpy.data.collections["marcas"].objects}
+    d = lambda a, b: float(np.linalg.norm(P[a] - P[b]))
+    cab = mundo(bpy.data.objects["cabeza"])
+    pan = mundo(bpy.data.objects["pantalon"])
+    med = {
+        "estatura":              float(cab[:, 2].max()),
+        "altura de los ojos":    float((P["ojo_izq_centro"][2] + P["ojo_der_centro"][2]) / 2),
+        "cabeza (coronilla-mentón)": float(cab[:, 2].max()) - float(P["menton"][2]),
+        "intercantal":           d("lagrimal_izq", "lagrimal_der"),
+        "interpupilar":          d("ojo_izq_centro", "ojo_der_centro"),
+        "anchura de la nariz":   d("ala_izq", "ala_der"),
+        "anchura de la boca":    d("comisura_izq", "comisura_der"),
+        "anchura entre orejas":  d("oreja_izq", "oreja_der"),
+        "cintura":               float(pan[:, 2].max()),
+        "tobillo":               float(pan[:, 2].min()),
+        "pie con bota":          float(np.ptp(mundo(bpy.data.objects["bota_izq"])[:, 1])),
+        "mano":                  float(np.ptp(mundo(bpy.data.objects["mano_izq"])[:, 2])),
+        "tricornio":             float(np.ptp(mundo(bpy.data.objects["sombrero"])[:, 1])),
+    }
+    return {k: round((med[k] - ANTROPOMETRIA[k]) * 1000, 1) for k in med}

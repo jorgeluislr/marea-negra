@@ -13,6 +13,11 @@
 [ext_resource type="PackedScene" uid="uid://bktul65h1jnmi" path="res://scenes/barcos/goleta.tscn" id="12"]
 [ext_resource type="PackedScene" path="res://scenes/barcos/balandra.tscn" id="13"]
 [ext_resource type="AudioStream" path="res://assets/audio/ambiente_puerto.wav" id="14"]
+[ext_resource type="Script" path="res://scripts/mapa/gestor_tierra.gd" id="15"]
+[ext_resource type="Resource" path="res://assets/islas/archipielago.res" id="16"]
+[ext_resource type="Resource" path="res://assets/islas/relieve_caribe.tres" id="19"]
+[ext_resource type="Material" path="res://assets/islas/tierra.tres" id="17"]
+[ext_resource type="PackedScene" path="res://scenes/ui/carta_nautica.tscn" id="18"]
 
 [sub_resource type="ShaderMaterial" id="CieloMat"]
 shader = ExtResource("10")
@@ -37,20 +42,10 @@ shader_parameter/color_agua = Color(0.04, 0.16, 0.24, 1)
 shader_parameter/rugosidad = 0.05
 shader_parameter/especular = 0.5
 shader_parameter/metalico = 0.0
-shader_parameter/estela = PackedVector4Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-shader_parameter/vida_estela = 3.0
-shader_parameter/vel_expansion = 1.6
-shader_parameter/amplitud_estela = 0.08
-shader_parameter/espuma_intensidad = 0.15
 shader_parameter/ola_amplitud = 0.03
 shader_parameter/ola_escala = 0.8
 shader_parameter/ola_velocidad = 0.6
 shader_parameter/recorte_activo = false
-shader_parameter/barco_pos = Vector2(0, 0)
-shader_parameter/barco_dir = Vector2(0, 1)
-shader_parameter/barco_radio = Vector2(1.1, 2.2)
-shader_parameter/recorte_proa_exp = 0.8
-shader_parameter/recorte_popa_exp = 0.4
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_water"]
 size = Vector2(500, 500)
@@ -92,8 +87,11 @@ unit_size = 25.0
 max_distance = 90.0
 autoplay = true
 
+; Salida en mar abierto, 1,5 km al sur de Norman Island. En el origen del mundo (el Drake Channel)
+; la costa de Tortola quedaba a 100 m: a escala 1/25 el canal mide unos 300 m y las pruebas de
+; navegación acababan contra tierra (`ia` / "ciñendo, gana terreno a barlovento": 30 m → 3-11).
 [node name="GestorBarcos" type="Node3D" parent="." unique_id=1258553189]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -10)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1500)
 script = ExtResource("8")
 barcos = Array[PackedScene]([ExtResource("13"), ExtResource("2"), ExtResource("7"), ExtResource("12")])
 altura_flotacion = 1.7393582
@@ -108,3 +106,12 @@ script = ExtResource("6")
 [node name="Musica" type="AudioStreamPlayer" parent="." unique_id=738563383]
 volume_db = 5.0
 script = ExtResource("9")
+
+; El relieve por celdas: detalle cerca, siluetas hasta 15 km. Ver `GestorTierra`.
+[node name="Tierra" type="Node3D" parent="."]
+script = ExtResource("15")
+relieve = ExtResource("19")
+archipielago = ExtResource("16")
+material = ExtResource("17")
+
+[node name="CartaNautica" parent="." instance=ExtResource("18")]

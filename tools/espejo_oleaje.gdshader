@@ -14,12 +14,20 @@ render_mode unshaded;
 // llega a pintarse (medido: devuelve basura), mientras que el de 8 bits no toca los colores
 // (escrito 0,25 → leído 0,25098, que es exactamente su cuantización).
 #include "res://assets/shaders/oleaje.gdshaderinc"
+#include "res://assets/shaders/agua_detalle.gdshaderinc"
+#include "res://assets/shaders/agua_estela.gdshaderinc"
 
 const int MUESTRAS = 64;
 const float RANGO = 16.0;   // ±8 m: paso de 0,25 mm con los 16 bits
 
 uniform vec2 puntos[MUESTRAS];
 uniform int modo = 0;   // 0 = altura, 1 = arrastre en x, 2 = arrastre en z, 3 = normal.y
+// 4 / 5 = pendiente total dibujada en x / z (ola con su LOD + relieve fino), 6 = varianza de
+// pendiente que no cabe en el píxel, 7 = cuánto se aclara la cresta, 8 = espuma, 9 = espuma de la
+// estela, 10 = altura de la estela. Las tres a `dist` metros de la cámara y con `huella`
+// metros de píxel: es lo que decide qué se dibuja y qué pasa a la rugosidad.
+uniform float dist = 0.0;
+uniform float huella = 0.01;
 
 void fragment() {
 	int i = int(floor(UV.x * float(MUESTRAS)));
@@ -31,8 +39,26 @@ void fragment() {
 		v = oleaje_desplaz(p).x;
 	} else if (modo == 2) {
 		v = oleaje_desplaz(p).z;
-	} else {
+	} else if (modo == 3) {
 		v = oleaje_normal(p).y;
+	} else {
+		vec3 n = oleaje_normal_lod(p, dist);
+		vec4 fino = agua_detalle(p, dist, huella);
+		if (modo == 4) {
+			v = -n.x / n.y + fino.x;
+		} else if (modo == 5) {
+			v = -n.z / n.y + fino.y;
+		} else if (modo == 6) {
+			v = fino.w;
+		} else if (modo == 7) {
+			v = agua_tono_cresta(oleaje_desplaz(p).y);
+		} else if (modo == 8) {
+			v = agua_espuma(p, dist);
+		} else if (modo == 9) {
+			v = agua_estela(p).z;
+		} else {
+			v = agua_estela(p).w;
+		}
 	}
 	float x = clamp(v / RANGO + 0.5, 0.0, 1.0) * 255.0;
 	float alto = floor(x);

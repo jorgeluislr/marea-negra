@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tools/tapa_en_su_sitio.gd" id="1"]
+
+[node name="TapaEnSuSitio" type="Node"]
+script = ExtResource("1")

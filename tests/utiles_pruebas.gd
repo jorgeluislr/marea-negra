@@ -21,6 +21,17 @@ static func tecla(arbol: SceneTree, k: int) -> void:
 		await arbol.process_frame
 
 
+## Deja al jugador al TIMÓN. Con el personaje en cubierta, A, D y S lo mueven a él y no al barco,
+## así que todo escenario que gobierne o maniobre con teclas empieza por aquí.
+static func al_timon(arbol: SceneTree) -> void:
+	var b := barco(arbol)
+	if b == null or bool(b.get("gobierno")):
+		return
+	await tecla(arbol, KEY_F)
+	for i in 90:
+		await arbol.process_frame
+
+
 ## Deja el barco quieto y el viento constante durante `segundos`.
 ##
 ## OJO: asignar `Viento.direccion` NO fija el viento — el autoload lo recalcula cada frame desde
@@ -477,7 +488,7 @@ const ESPEJO_MUESTRAS := 64
 const ESPEJO_RANGO := 16.0
 
 static func oleaje_del_shader(arbol: SceneTree, puntos: PackedVector2Array,
-		modo := 0) -> PackedFloat32Array:
+		modo := 0, dist := 0.0, huella := 0.01, estela: Estela = null) -> PackedFloat32Array:
 	var ps := PackedVector2Array(puntos)
 	ps.resize(ESPEJO_MUESTRAS)
 	var mat := ShaderMaterial.new()
@@ -487,6 +498,10 @@ static func oleaje_del_shader(arbol: SceneTree, puntos: PackedVector2Array,
 	Oleaje.aplicar(mat)
 	mat.set_shader_parameter("puntos", ps)
 	mat.set_shader_parameter("modo", modo)
+	mat.set_shader_parameter("dist", dist)
+	mat.set_shader_parameter("huella", huella)
+	if estela != null:
+		estela.aplicar(mat)
 	var vp := SubViewport.new()
 	vp.size = Vector2i(ESPEJO_MUESTRAS, 1)
 	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
@@ -507,3 +522,284 @@ static func oleaje_del_shader(arbol: SceneTree, puntos: PackedVector2Array,
 		salida.append((v - 0.5) * ESPEJO_RANGO)
 	vp.queue_free()
 	return salida
+
+
+## Cuánto paño ha pasado al otro lado de los obenques: {pasados, total, az_vela, az_obenque}.
+##
+## La vela de cangreja y los obenques nacen del MISMO eje —el mástil—, así que basta comparar
+## azimutes alrededor de ese eje: si el paño gira más que el obenque de popa de su banda, los
+## dos se cruzan necesariamente, y eso es lo que se ve como la jarcia atravesando la lona. Medir
+## distancias punto a cabo no distingue "roza" de "la atraviesa entera"; el azimut sí.
+##
+## Todo en ejes del BARCO. Los ángulos salen en grados, positivos a estribor.
+static func vela_en_jarcia(arbol: SceneTree, barco: Node3D, tela: Node) -> Dictionary:
+	await arbol.physics_frame
+	var d: Dictionary = tela.datos_depuracion()
+	var apa: Resource = tela.get("aparejo")
+	if d.is_empty() or apa == null:
+		return {}
+	var skel: Skeleton3D = null
+	for n in barco.find_children("*", "Skeleton3D", true, false):
+		skel = n as Skeleton3D
+		break
+	var h := skel.find_bone(String(apa.get("trimado_hueso"))) if skel != null else -1
+	if h < 0:
+		return {}
+	var al_barco := barco.global_transform.affine_inverse() * skel.global_transform
+	var rest := skel.get_bone_global_rest(h)
+	var origen := al_barco * rest.origin
+	var eje := (al_barco.basis * rest.basis.y).normalized()
+	var popa := (Vector3(0, 0, 1) - eje * eje.z).normalized()
+	var lat := (Vector3(1, 0, 0) - eje * eje.x).normalized()
+	var az := func(p: Vector3) -> float:
+		var q := p - origen
+		q -= eje * q.dot(eje)
+		return rad_to_deg(atan2(q.dot(lat), q.dot(popa)))
+
+	# El obenque que topa primero es el de POPA de cada banda: el de menor azimut.
+	var az_ob := {-1.0: 180.0, 1.0: 180.0}
+	for mi in barco.find_children("obenque*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if m.mesh == null:
+			continue
+		var tr := al_barco * _hasta(m, skel)
+		# El extremo de la MESA, que es el que se separa del palo; arriba el cabo muere en el
+		# tope del mástil, donde el azimut no significa nada porque el radio es cero.
+		var bajo := Vector3.INF
+		for v in (m.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array):
+			var p: Vector3 = tr * v
+			if p.y < bajo.y:
+				bajo = p
+		var a: float = az.call(bajo)
+		var banda: float = signf(a)
+		if absf(a) < absf(az_ob[banda]):
+			az_ob[banda] = a
+
+	var cuerpo: SoftBody3D = d["cuerpo"]
+	var fijo: PackedByteArray = d["fijo"]
+	var suma := 0.0
+	var azs := PackedFloat32Array()
+	for i in fijo.size():
+		var p := barco.global_transform.affine_inverse() * cuerpo.get_point_transform(i)
+		var a: float = az.call(p)
+		azs.append(a)
+		suma += a
+	var medio := suma / maxf(azs.size(), 1)
+	var banda: float = signf(medio)
+	var limite: float = az_ob[banda]
+	var pasados := 0
+	for a in azs:
+		if signf(a) == banda and absf(a) > absf(limite):
+			pasados += 1
+	return {
+		"pasados": pasados,
+		"total": azs.size(),
+		"az_vela": medio,
+		"az_obenque": limite,
+	}
+
+
+## Cuántas caras de la lona ATRAVIESA cada obenque: {cruces, por_cabo}.
+##
+## Es el defecto tal como se ve —el cabo saliendo por el medio del paño— y no lo mismo que
+## `vela_en_jarcia()`. El azimut cuenta como "pasado" todo punto que gire más que el obenque,
+## incluido el paño que está por FUERA del cabo y solo se ha doblado al apoyarse en él: con la
+## lona descansando en la jarcia ese número no baja, y aquí sí tiene que dar cero.
+##
+## El cabo se toma como el segmento entre su vértice más bajo y el más alto: es recto y tiene
+## 1,5 cm de radio, así que su eje es él. Se cruza con cada triángulo del `SoftBody`, cuyos
+## puntos son los vértices de su propia malla soldada.
+static func jarcia_por_la_lona(arbol: SceneTree, barco: Node3D, tela: Node,
+		patron := "obenque*") -> Dictionary:
+	await arbol.physics_frame
+	var d: Dictionary = tela.datos_depuracion()
+	if d.is_empty():
+		return {}
+	var cuerpo: SoftBody3D = d["cuerpo"]
+	var idx: PackedInt32Array = cuerpo.mesh.surface_get_arrays(0)[Mesh.ARRAY_INDEX]
+	var n := (cuerpo.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+	var p := PackedVector3Array()
+	p.resize(n)
+	for i in n:
+		p[i] = cuerpo.get_point_transform(i)
+	var por_cabo := {}
+	var cruces := 0
+	for mi in barco.find_children(patron, "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if m.mesh == null:
+			continue
+		var bajo := Vector3(0.0, INF, 0.0)
+		var alto := Vector3(0.0, -INF, 0.0)
+		for v in (m.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] as PackedVector3Array):
+			var g: Vector3 = m.global_transform * v
+			if g.y < bajo.y:
+				bajo = g
+			if g.y > alto.y:
+				alto = g
+		var k := 0
+		for t in range(0, idx.size(), 3):
+			if Geometry3D.segment_intersects_triangle(bajo, alto,
+					p[idx[t]], p[idx[t + 1]], p[idx[t + 2]]) != null:
+				k += 1
+		if k > 0:
+			por_cabo[String(m.name)] = k
+		cruces += k
+	return {"cruces": cruces, "por_cabo": por_cabo}
+
+
+## Cómo está la lona respecto a los MUROS de detrás de los obenques (`Lona_*` de
+## `perchas_solidas`): {dentro, hondo, cerca}. `dentro` son los puntos libres metidos en algún
+## muro, `hondo` cuánto se mete el más metido y `cerca` lo más que se acerca un punto a la cara
+## del muro (negativo si está dentro), todo en metros.
+##
+## Sirve para saber si una prueba de la jarcia llega a TOCAR el muro: fondeado con el viento de
+## 160° la mayor pasa del obenque por azimut y no lo roza (`cerca` de varios centímetros), así que
+## un cero de caras atravesadas ahí no dice nada del muro.
+static func lona_en_muros(arbol: SceneTree, barco: Node3D, tela: Node) -> Dictionary:
+	await arbol.physics_frame
+	var d: Dictionary = tela.datos_depuracion()
+	if d.is_empty():
+		return {}
+	var cuerpo: SoftBody3D = d["cuerpo"]
+	var fijo: PackedByteArray = d["fijo"]
+	var muros := []
+	for c in barco.find_children("Lona_*", "StaticBody3D", true, false):
+		var cs := c.get_child(0) as CollisionShape3D
+		var cap := cs.shape as CapsuleShape3D
+		muros.append([(c as Node3D).global_transform * cs.transform, cap.radius,
+			maxf(cap.height * 0.5 - cap.radius, 0.0)])
+	var dentro := 0
+	var cerca := INF
+	for i in fijo.size():
+		if fijo[i] == 1:
+			continue
+		var p := cuerpo.get_point_transform(i)
+		var mia := INF
+		for m in muros:
+			var q: Vector3 = (m[0] as Transform3D).affine_inverse() * p
+			mia = minf(mia, q.distance_to(Vector3(0.0, clampf(q.y, -m[2], m[2]), 0.0)) - float(m[1]))
+		if mia < 0.0:
+			dentro += 1
+		cerca = minf(cerca, mia)
+	return {"dentro": dentro, "hondo": maxf(-cerca, 0.0), "cerca": cerca, "muros": muros.size()}
+
+
+static func _hasta(n: Node, raiz: Node) -> Transform3D:
+	var t := Transform3D()
+	var x: Node = n
+	while x != null and x != raiz:
+		if x is Node3D:
+			t = (x as Node3D).transform * t
+		x = x.get_parent()
+	return t
+
+
+## Cuánto TIEMBLAN el casco y sus telas: segunda diferencia RMS por paso de física, en metros.
+##
+## {casco, libre, anclada, estir, malas} y, si se pasa `al_paso`, también el tirón en los tres
+## pasos que rodean a ese paso (`casco_pico`, `tela_pico`) contra el peor del resto de la serie
+## (`casco_resto`, `tela_resto`). `accion` se llama justo antes de esperar ese paso.
+##
+## La segunda diferencia y no la posición porque lo que delata la precisión simple es la
+## ACELERACIÓN: a 50 km un `float` solo distingue pasos de 3,9 mm, así que cada paso el casco y
+## cada punto del paño caen en esa rejilla. Un bamboleo de medio metro cada cinco segundos da
+## 0,2 mm de segunda diferencia a 60 Hz; la rejilla, milímetros.
+##
+## Las restas van en DOBLE (los `float` de GDScript son de 64 bits) sobre valores que ya vienen
+## cuantizados del motor, y restar dos `float` cercanos es exacto: lo que se mide es el temblor
+## del motor, no el de la medida. La tela, en ejes del BARCO: en ejes de mundo saldría el
+## bamboleo del casco. Y la resta va ANTES del giro, o el error de 50 km se mezcla en el giro.
+static func temblor(arbol: SceneTree, b: Node3D, pasos: int, al_paso := -1,
+		accion := Callable()) -> Dictionary:
+	var ts := telas(arbol).filter(func(t): return not (t.datos_depuracion() as Dictionary).is_empty())
+	var casco: Array = []
+	var puntos := {}
+	for tela in ts:
+		puntos[tela] = []
+	# El casco, en ABSOLUTO si hay origen flotante: un recentrado corre su posición local
+	# kilómetros, y eso no es un tirón.
+	var origen := arbol.root.get_node_or_null("Origen")
+	for paso in pasos:
+		if paso == al_paso and accion.is_valid():
+			accion.call()
+		await arbol.physics_frame
+		var o := _dobles(b.global_position)
+		var oa := o.duplicate()
+		if origen != null:
+			oa[0] += float(origen.x)
+			oa[2] += float(origen.z)
+		casco.append(oa)
+		var inv := b.global_transform.basis.inverse()
+		for tela in ts:
+			var d: Dictionary = tela.datos_depuracion()
+			var cuerpo: SoftBody3D = d["cuerpo"]
+			var n: int = (d["fijo"] as PackedByteArray).size()
+			var fila := PackedFloat64Array()
+			fila.resize(n * 3)
+			for k in n:
+				var p := _dobles(cuerpo.get_point_transform(k))
+				var rel := inv * Vector3(p[0] - o[0], p[1] - o[1], p[2] - o[2])
+				fila[k * 3] = rel.x
+				fila[k * 3 + 1] = rel.y
+				fila[k * 3 + 2] = rel.z
+			puntos[tela].append(fila)
+	var r := {"casco": _rms2(casco, 0, 1), "libre": 0.0, "anclada": 0.0, "estir": 0.0, "malas": 0}
+	var nl := 0
+	var na := 0
+	for tela in ts:
+		var d: Dictionary = tela.datos_depuracion()
+		var fijo: PackedByteArray = d["fijo"]
+		var filas: Array = puntos[tela]
+		for k in fijo.size():
+			var v := _rms2(filas, k, 3)
+			if fijo[k] == 1:
+				r["anclada"] += v
+				na += 1
+			else:
+				r["libre"] += v
+				nl += 1
+		var e: Dictionary = await estiramiento(arbol, tela)
+		r["estir"] = maxf(r["estir"], e.get("medio", 0.0))
+		r["malas"] += int(e.get("malas", 0))
+	r["libre"] /= maxf(nl, 1)
+	r["anclada"] /= maxf(na, 1)
+	if al_paso >= 2 and al_paso + 1 < pasos:
+		for clave in ["casco_pico", "casco_resto", "tela_pico", "tela_resto"]:
+			r[clave] = 0.0
+		for i in range(1, pasos - 1):
+			var cerca := absi(i - al_paso) <= 1
+			var c := _d2(casco, 0, 1, i)
+			r["casco_pico" if cerca else "casco_resto"] = maxf(
+				r["casco_pico" if cerca else "casco_resto"], c)
+			for tela in ts:
+				var filas: Array = puntos[tela]
+				var np: int = (filas[0] as PackedFloat64Array).size() / 3
+				for k in np:
+					var v := _d2(filas, k, 3, i)
+					r["tela_pico" if cerca else "tela_resto"] = maxf(
+						r["tela_pico" if cerca else "tela_resto"], v)
+	return r
+
+
+static func _dobles(v: Vector3) -> PackedFloat64Array:
+	return PackedFloat64Array([float(v.x), float(v.y), float(v.z)])
+
+
+## Módulo de la segunda diferencia de la serie en el paso `i`.
+static func _d2(serie: Array, k: int, ancho: int, i: int) -> float:
+	var s := 0.0
+	for c in 3:
+		var a: float = serie[i - 1][k * ancho + c]
+		var m: float = serie[i][k * ancho + c]
+		var z: float = serie[i + 1][k * ancho + c]
+		s += pow(z - 2.0 * m + a, 2.0)
+	return sqrt(s)
+
+
+static func _rms2(serie: Array, k: int, ancho: int) -> float:
+	var s := 0.0
+	var n := 0
+	for i in range(1, serie.size() - 1):
+		s += pow(_d2(serie, k, ancho, i), 2.0)
+		n += 1
+	return sqrt(s / maxf(n, 1))

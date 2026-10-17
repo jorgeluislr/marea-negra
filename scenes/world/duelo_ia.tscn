@@ -39,20 +39,10 @@ shader_parameter/color_agua = Color(0.04, 0.16, 0.24, 1)
 shader_parameter/rugosidad = 0.05
 shader_parameter/especular = 0.5
 shader_parameter/metalico = 0.0
-shader_parameter/estela = PackedVector4Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-shader_parameter/vida_estela = 3.0
-shader_parameter/vel_expansion = 1.6
-shader_parameter/amplitud_estela = 0.08
-shader_parameter/espuma_intensidad = 0.15
 shader_parameter/ola_amplitud = 0.03
 shader_parameter/ola_escala = 0.8
 shader_parameter/ola_velocidad = 0.6
 shader_parameter/recorte_activo = false
-shader_parameter/barco_pos = Vector2(0, 0)
-shader_parameter/barco_dir = Vector2(0, 1)
-shader_parameter/barco_radio = Vector2(1.1, 2.2)
-shader_parameter/recorte_proa_exp = 0.8
-shader_parameter/recorte_popa_exp = 0.4
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_water"]
 size = Vector2(500, 500)

@@ -23,7 +23,25 @@ signal ancla_cambiada(anclada: bool)
 @export var velocidad_max := 12.0
 @export var aceleracion := 4.0
 @export var velocidad_giro := 1.0
-@export_range(0.0, 1.0) var giro_minimo := 0.2
+## En cuántos segundos mata la quilla el movimiento de LADO. Es lo que decide cuánto derrapa el
+## casco al virar: con 0 pivota (el movimiento salta a la proa nueva al instante) y cuanto mayor
+## sea, más se desplaza de costado antes de enfilar.
+##
+## El ángulo de deriva en una curva sostenida sale de `velocidad_giro · resistencia_lateral`, así
+## que con 0,45 rad/s y 0,40 s son unos 10°, que es lo que abate un velero virando con todo el
+## timón.
+@export var resistencia_lateral := 0.40
+## Inercia de GUIÑADA: en cuántos segundos llega el barco a la velocidad de giro que le piden el
+## timón y las velas (la constante T de Nomoto). El timón empuja la popa contra el agua; el casco,
+## con todo su peso girando alrededor de su centro, tarda en coger el giro y tarda en soltarlo.
+##
+## **Sin ella el giro aparecía de golpe**: medido con `tools/escora_dinamica.tscn`, a los 0,1 s de
+## meter la caña la balandra ya giraba a 25,8 °/s, su giro entero. Y como la escora del giro va con
+## `v·ω`, también la escora saltaba con la tecla — "como si no la frenara el peso del barco".
+@export var inercia_guinada := 1.2
+## Cuánto cía de proa al viento, en fracción de `velocidad_max`. Ver la propulsión: dentro de la
+## zona muerta la vela no tira y el aparejo empuja hacia atrás.
+@export_range(0.0, 0.5) var cia_en_el_ojo := 0.08
 @export var angulo_muerto := 45.0
 @export var angulo_optimo := 100.0
 @export_range(0.0, 1.0) var empuje_delantera := 0.4   # propulsión que aporta la vela delantera
@@ -31,10 +49,38 @@ signal ancla_cambiada(anclada: bool)
 @export var sesgo_giro_velas := 0.5                    # giro por balance de velas (rad/s a plena vela)
 @export var nombre := "Barco"                          # nombre para el HUD/selector
 @export var altura_flotacion := 1.74                   # Y a la que flota (línea de cubierta sobre el agua)
+## Si este casco lleva TAPA DE SENTINA: una chapa opaca a la altura de la lámina, dentro del
+## casco, que impide ver el mar por sus aberturas.
+##
+## Hace falta, y está medido: sin nada, por la rejilla de la escotilla de la balandra se ve el
+## agua con sus reflejos, dentro del barco. Lo que había antes para esto era RECORTAR el agua
+## (un `discard` en el shader dentro de una elipse en planta), y eso deja de servir en cuanto el
+## casco cabecea y escora: la elipse no gira con él, así que abre un hueco de mar por una banda
+## mientras deja entrar el agua por la otra, y desde fuera se ve el corte alrededor del casco.
+##
+## La tapa no tiene ese problema porque es GEOMETRÍA y viaja con el barco. Además el mar queda
+## entero: no se le hace un agujero, simplemente hay madera tapándolo donde no debe verse.
+@export var tapa_sentina := true
+## Qué tramo de la eslora se tapa, en metros y en ejes del barco (z mínimo, z máximo). Con (0, 0)
+## se coge el casco entero.
+##
+## Lo usan las dos formas de que no se vea el mar dentro: el recorte del agua y la tapa de
+## sentina. **Solo hay que tapar por donde se ve el agua, que es la bodega y sus escotillas**;
+## llegar de proa a popa no aporta nada y multiplica las ocasiones de asomar por algún lado al
+## escorar. La idea es del usuario y es la buena: cuanto menos cubra, menos puede fallar.
+@export var zona_interior := Vector2.ZERO
+## Si el agua se RECORTA dentro de este casco: el shader del mar tira los fragmentos que caen
+## dentro del volumen del barco, y así no hay mar ni por las escotillas ni en la bodega.
+##
+## Estuvo apagado una temporada y se puso en su lugar una tapa de sentina —geometría sólida
+## flotando dentro del barco— porque el recorte era una elipse EN PLANTA que no se inclinaba con
+## el casco. Eso era arreglar el síntoma: lo que pedía el recorte era la pose entera del barco, no
+## su posición y su rumbo. Con la matriz inversa del casco el agujero cabecea y escora con él.
+@export var recorta_el_agua := true
+## Nombre de la malla que encierra el hueco por donde se ve el agua: la BODEGA. De ella sale, tal
+## cual, la caja con la que el mar se recorta. Vacío = este casco no recorta.
+@export var malla_bodega := ""
 @export var recorte_radio := Vector2(1.0, 2.0)         # semiejes del recorte del casco (manga, eslora)
-@export var recorte_proa_exp := 0.8                    # forma de la proa en el recorte del agua
-@export var recorte_popa_exp := 0.4                    # forma de la popa en el recorte del agua
-
 # ── Timón ────────────────────────────────────────────────────────────────────
 ## Gira el hueso del timón según la ENTRADA del jugador, no según el giro real del casco:
 ## así la caña responde al instante aunque el barco esté parado o anclado, que es lo que se
@@ -86,8 +132,36 @@ signal ancla_cambiada(anclada: bool)
 @export var colision_mallas_suelo: Array[String] = []
 @export_range(4, 40) var colision_secciones := 16
 @export var colision_grueso_borda := 0.14   ## Grueso de la cadena de cajas de la borda.
-@export var colision_alto_barrera := 1.6    ## Cuánto sube la barrera invisible sobre la regala.
+## Cuánto sube la barrera invisible sobre la regala. **En CERO no se levanta**, que es como va
+## desde que el personaje sabe nadar: un muro de aire de metro y medio por toda la banda impide
+## caerse, sí, pero también saltar al agua, subir por los obenques desde la regala y pasar a la
+## mesa de guarnición — y caerse por la borda de un barco que navega es parte del juego, no un
+## fallo. Quien cae nada (`Jugador._nadar`) y vuelve a bordo con E.
+##
+## Subirla otra vez es poner aquí un número: el mecanismo sigue entero, incluido apartarla de la
+## jarcia (`colision_paso_jarcia`), que es lo que hacía falta para que dejara subir.
+@export var colision_alto_barrera := 0.0
 @export var colision_margen_barrera := 0.02 ## Cuánto se separa hacia fuera, para no pisarla.
+## Mallas de JARCIA por las que se trepa. En la franja de eslora que ocupan, la barrera se aparta
+## hacia fuera hasta dejar libre el plano de los cabos: si no, cae justo encima de las mesas de
+## guarnición y los peldanos de abajo de la escala quedan dentro de una caja de colisión.
+##
+## Medido con `tools/subir_por_obenques.tscn` antes de esto: **4 peldanos de 13** tapados por la
+## barrera, y el personaje empujando y saltando subía 1,45 m y se paraba clavado en y = 3,90, que
+## es el borde alto de la barrera. Vacío = el barco no tiene jarcia por la que subir.
+@export var colision_jarcia := "obenque_*"
+## Hueco que se deja entre los cabos y la barrera. Es el DIÁMETRO de la cápsula del personaje
+## (0,40 de radio en `player.tscn`) y no su radio: a los obenques se sube desde la regala con el
+## cuerpo POR FUERA y la escala contra el pecho, como en un barco de verdad, así que tiene que
+## caber entero al otro lado de los cabos. Con el radio la barrera seguía mordiendo cinco
+## peldanos de trece (`tools/subir_por_obenques.tscn`), que además son los de abajo — justo por
+## donde se empieza.
+@export var colision_paso_jarcia := 0.85
+## Escalas por las que se trepa, una por patrón: los flechastes de cada banda. De cada grupo sale
+## un `EscalaJarcia` con su altura, su ancho y hacia dónde sube, medido de las propias mallas.
+##
+## Trepar no se resuelve con colisionadores y está medido: ver el docstring de `EscalaJarcia`.
+@export var colision_escalas: Array[String] = ["flechaste_b_*", "flechaste_e_*"]
 ## Capa 3: la caja del casco va en la 2 y llena el interior del barco, así que el personaje
 ## no puede compartir capa con ella o andaría 1,2 m por encima de la cubierta.
 @export_flags_3d_physics var colision_capa := 4
@@ -127,8 +201,65 @@ signal ancla_cambiada(anclada: bool)
 @export var municion := 60
 @export_group("")
 
-const BOB_AMPLITUDE := 0.15
-const BOB_SPEED := 1.2
+## Cuántas estaciones de flotación se reparten a lo largo de la ESLORA. De ahí sale la rejilla
+## entera: el paso es la eslora entre este número, y a lo ancho se ponen las que quepan con ese
+## mismo paso, así que los puntos están a distancia regular en las dos direcciones y no hay que
+## dar una cifra por eje. Ver `_repartir_flotacion()`.
+@export_range(3, 15) var muestras_flotacion := 9
+## Calado en metros: cuánto casco hay bajo la lámina. Es el tope de emersión de un punto de
+## flotación — más arriba de eso el punto está EN EL AIRE y ya no puede perder más empuje.
+##
+## Es lo que deja la proa colgando sobre la cresta en vez de tirar de ella hacia abajo, y por eso
+## la caída posterior es un golpe y no un vaivén simétrico.
+@export var calado := 0.5
+## Periodo propio de ARFADA (subir y bajar), CABECEO y BALANCE, en segundos, y lo amortiguado que
+## va cada uno en fracción del crítico (1 = vuelve sin pasarse, 0 = oscila para siempre).
+##
+## Son SEIS números y no un filtro porque un casco no persigue la superficie: tiene masa, y su
+## empuje es un muelle. Un filtro de primer orden —lo que había— no puede pasarse nunca de su
+## objetivo, así que la proa no podía quedarse colgando en la cresta ni caer después con fuerza;
+## llegaba a la ola tarde y suave y ahí se quedaba. Con un sistema de segundo orden eso sale
+## solo, y la amortiguación es la que decide cuántos balanceos tarda en calmarse.
+## El periodo de ARFADA no está aquí a propósito: sale de `calado`, porque un cuerpo que flota
+## oscila a `sqrt(g/calado)` y no a lo que se le diga. Con este calado son 1,42 s.
+@export_range(0.05, 1.5) var amortiguacion_arfada := 0.45
+@export var periodo_cabeceo := 1.8
+@export_range(0.05, 1.5) var amortiguacion_cabeceo := 0.40
+## El periodo de BALANCE tampoco se elige: sale de la manga y de la GM — ver `periodo_balance()`.
+@export_range(0.05, 1.5) var amortiguacion_balance := 0.80
+## Cuánto de la inclinación que le tocaría se le aplica, de 0 a 1, en cada eje.
+##
+## **Son dos y no una, y la diferencia es física, no de gusto.** La estabilidad longitudinal de
+## cualquier casco (GML) es dos órdenes mayor que la transversal (GM): la eslora es tres veces la
+## manga y entra al cubo. Un barco lastrado NO se pone paralelo a la ola al escorar —se queda a
+## medio camino, que es lo que mide `obediencia_escora`— pero en cabeceo no tiene margen para
+## desobedecer: se apoya en la ola y sigue su pendiente casi exactamente.
+@export_range(0.0, 1.0) var obediencia_escora := 0.7
+@export_range(0.0, 1.0) var obediencia_cabeceo := 1.0
+## Altura metacéntrica GM, en metros: LA medida de estabilidad de un casco.
+##
+## Es la que decide cuánto se tumba con un par dado, venga del viento o de un giro, y por eso las
+## dos escoras se calculan contra ella en vez de con un número suelto cada una: un barco más
+## estable se tumba menos por todo a la vez, que es como funciona de verdad. Un velero pequeño
+## anda por 0,6-1,5 m; esta balandra es un casco de carga, ancho y con la bodega baja.
+@export var altura_metacentrica := 0.9
+## Brazo del par escorante del GIRO, en metros: altura del centro de gravedad sobre el centro de
+## resistencia lateral, que es por donde el agua empuja de vuelta al casco. Es lo que convierte
+## la fuerza centrífuga en un par en vez de en un empujón de lado.
+##
+## **En este casco valdría 1,4 m y aquí está en 0,32, y conviene saber por qué.** La fórmula es
+## correcta; lo que no es realista es lo cerrado que vira este barco: a 9 m/s alcanza 0,45 rad/s,
+## o sea un radio de 20 m con 12 m de eslora, y eso son 0,41 g de aceleración centrípeta. Con el
+## brazo de verdad la escora se iba a 22° de media y 33 de punta, que es tumbar la regala en el
+## agua — y la física decía bien, el que exagera es el timón. Se compensa aquí porque bajar
+## `velocidad_giro` cambiaría el manejo del barco y el juego de la IA; el día que el gobierno se
+## haga realista, este número sube a 1,4.
+@export var brazo_giro := 0.32
+## Brazo del par escorante del VIENTO, en metros por unidad de peso del barco, con el viento
+## justo por el través, a fuerza 1 y con todo el trapo arriba. Calibrado para que dé unos 4° con
+## el GM de esta balandra: `tan(4°) · 0,9 = 0,063`.
+@export var brazo_velico := 0.063
+
 
 # Estado de las acciones (empieza navegando: ambas velas abiertas, sin anclar).
 var vela_delantera := true
@@ -150,6 +281,64 @@ var orden_timon := 0.0:
 var velocidad := 0.0
 var time := 0.0
 var base_y := 0.0
+## Altura, cabeceo y escora del casco, y sus velocidades: el estado del sistema de flotación.
+## Ver `_seguir_al_mar()`.
+var _y_mar := 0.0
+var _cabeceo := 0.0
+var _escora := 0.0
+var _v_arfada := 0.0
+var _v_cabeceo := 0.0
+var _v_escora := 0.0
+var _mar_leido := false
+## Puntos de flotación en ejes del barco: (x a la banda, z a la eslora, peso). Los reparte
+## `_repartir_flotacion()` una vez, porque no cambian.
+var _flotacion: Array[Vector3] = []
+## Sumas fijas de la rejilla: peso total y momentos de segundo orden. Son el denominador de las
+## pendientes y no dependen de la ola.
+var _flot_w := 0.0
+var _flot_x2 := 0.0
+var _flot_z2 := 0.0
+## Altura de la lámina bajo el casco, promediada sobre la rejilla de flotación. La calcula
+## `_seguir_al_mar()` y la usa la tapa de sentina: es LA MISMA agua sobre la que flota el barco.
+var _agua_media := 0.0
+## Perfil del casco en la flotación: medio ancho por rebanada y entre qué z va. Lo mide
+## `_anchos_en_la_flotacion()` una vez y lo consume el recorte del agua.
+var _anchos := PackedFloat32Array()
+var _anchos_z := Vector2.ZERO
+var _anchos_fallo := false
+## Caja de la bodega en ejes del barco, para el recorte del agua. Ver `caja_recorte()`.
+var _caja_bodega := AABB()
+var _caja_fallo := false
+## Velocidad angular del casco y el rumbo del paso anterior, para medirla. Ver `_medir_giro()`.
+var _omega := 0.0
+## Velocidad de guiñada que el casco LLEVA, en rad/s: la que el timón y las velas le piden pasada
+## por `inercia_guinada`.
+var _guinada := 0.0
+var _rumbo_previo := 0.0
+## Cuánto se echa atrás la tapa respecto a la madera que tocan sus rayos, en METROS. Lo justo
+## para no rozar el casco cuando escora: con 3° y 2,4 m de puntal, la sección se corre 12 cm.
+const MARGEN_TAPA := 0.18
+## Cuánto sube el faldón desde el borde de la tapa, en metros.
+const ALTO_FALDON := 0.22
+## Cuánto se levanta la tapa sobre la lámina, en metros.
+##
+## Hay dos límites y la tapa tiene que caber entre ellos: por abajo, la ola dentro de su propia
+## eslora sube y baja unos 35 cm respecto al centro, y si la pasa se ve el mar dentro; por
+## arriba está la cubierta, a 1,17 m de la lámina en esta balandra, y si la toca aparecen
+## MANCHAS NEGRAS sobre las tablas — que es lo que pasó al hacer que el alza creciera con el
+## estado de la mar hasta 95 cm, y con el faldón encima llegaba a 1,40. No crece con la mar: se
+## queda donde cabe.
+const ALZA_TAPA := 0.42
+## Cuánto puede subir o bajar la tapa dentro de la bodega respecto a su sitio, en metros. Ver
+## `_mover_tapa()`, que es donde están los dos límites que lo fijan.
+const MARGEN_ALTO_TAPA := 0.35
+## Lados del contorno de la tapa (la mitad por banda).
+const LADOS_TAPA := 64
+## Qué grosor de casco se mira alrededor de la línea de flotación, en metros.
+const BANDA_TAPA := 0.25
+## Cuánto se mete el recorte del agua hacia DENTRO del casco por cada banda, en metros.
+var _tapa: MeshInstance3D
+var _tapa_mat: StandardMaterial3D
 
 var _skel: Skeleton3D
 var _timon_idx := -1
@@ -158,6 +347,8 @@ var _timon_angulo := 0.0
 
 var _jugador: CharacterBody3D
 var _andando := false
+## Si el personaje se cayó por la borda y anda nadando por su cuenta.
+var _al_agua := false
 var _cuerpo_colisiones: StaticBody3D
 ## Las velas de este barco. Se recogen entre los HIJOS DIRECTOS, por el método que responden
 ## (`izar`), no por su tipo: al barco le da igual que una vela sea de tela física o de shader
@@ -184,6 +375,379 @@ var _alto := 0.0
 
 
 
+## Monta la tapa de sentina: un cuenco con la forma REAL del casco en la flotación, que impide
+## ver el mar por las aberturas del barco.
+##
+## La silueta se MIDE con rayos contra el propio casco, no se saca de `recorte_radio`. Aquellos
+## semiejes describen la silueta en cubierta, que es más ancha y sobre todo más larga que el
+## casco a la altura del agua —la roda y el codaste se inclinan—, así que la tapa asomaba por
+## fuera y se veía una caja negra alrededor del barco.
+##
+## El faldón sube desde el borde en lugar de bajar. Bajando salía por debajo de la quilla: este
+## casco cala 47 cm y el faldón medía 90. Y hacia arriba tapa igual de bien lo que hay que tapar,
+## que es la visión oblicua desde cubierta hacia el hueco entre la tapa y la madera.
+func _poner_tapa() -> void:
+	var contorno := _medir_silueta()
+	if contorno.is_empty():
+		return
+	var vs := PackedVector3Array()
+	vs.append(Vector3.ZERO)
+	for p in contorno:
+		vs.append(Vector3(p.x, 0.0, p.y))
+	var idx := PackedInt32Array()
+	var n := contorno.size()
+	for k in n:
+		idx.append_array([0, 1 + k, 1 + (k + 1) % n])
+	# Faldón hacia ARRIBA: una pared corta desde el borde, para que no se cuele el mar de
+	# refilón por la holgura contra la madera.
+	for k in n:
+		vs.append(vs[1 + k] + Vector3(0.0, ALTO_FALDON, 0.0))
+	for k in n:
+		var a := 1 + k
+		var b := 1 + (k + 1) % n
+		var c := 1 + n + k
+		var d := 1 + n + (k + 1) % n
+		idx.append_array([a, b, c, b, d, c])
+	var ns := PackedVector3Array()
+	ns.resize(vs.size())
+	ns.fill(Vector3.UP)
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = vs
+	arr[Mesh.ARRAY_NORMAL] = ns
+	arr[Mesh.ARRAY_INDEX] = idx
+	var malla := ArrayMesh.new()
+	malla.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+
+	_tapa_mat = StandardMaterial3D.new()
+	# **Madera de sentina, no agua.** Era un gris azulado oscuro —"agua de sentina"— y por la
+	# rejilla de la escotilla se leía como lo que es: una lámina gris metida dentro del barco. El
+	# usuario lo describió como "gris y azul dentro de la bodega".
+	#
+	# Y no es cuestión de gusto: medido con `tools/por_la_rejilla.tscn`, que fotografía cada
+	# escotilla con la tapa y sin ella, la tapa ocupa el **83-94 % del hueco de las CUATRO, en las
+	# 24 tomas**, y lo que esconde es el suelo de madera de la bodega — quitándola solo se vería
+	# mar en el 1,7 % bajo las centrales. Es decir, casi nunca tapa mar: tapa madera.
+	#
+	# OJO, aquí estuvo escrito que la escotilla de popa "cae fuera de la bodega modelada", y es
+	# FALSO: las cuatro caen dentro de su planta, la de popa con 0,255 m de margen hasta el
+	# mamparo. Lo que pasa por esa rejilla es que el agua SUBE por encima del suelo de la bodega,
+	# que solo lo tiene 0,182 m sobre la lámina. El error salió de comparar la posición
+	# longitudinal de la escotilla (|z| hasta 2,07) contra el SEMIANCHO de la bodega (1,148), que
+	# son dos ejes distintos — y por eso las dos que salían "limpias" eran justo las dos con
+	# |z| < 1,148.
+	# El albedo es de madera CLARA aunque lo que se vea acabe siendo oscuro: la tapa está bajo la
+	# cubierta, sin luz directa y con la exposición de la escena a −5 EV, así que un albedo oscuro
+	# se va a negro puro y vuelve a cantar. Lo que tiene que parecerse es al suelo de la bodega,
+	# que es la tabla que hay al lado y se ve marrón.
+	_tapa_mat.albedo_color = Color(0.30, 0.20, 0.12)
+	_tapa_mat.roughness = 1.0
+	_tapa_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_tapa = MeshInstance3D.new()
+	_tapa.name = "TapaSentina"
+	_tapa.mesh = malla
+	_tapa.material_override = _tapa_mat
+	_tapa.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# La tapa es hija del casco y hereda su pose ENTERA, cabeceo y escora incluidos. Fue `top_level`
+	# —siguiendo solo posición y rumbo, porque la lámina no se inclina— y eso valía mientras el
+	# casco apenas se movía; en cuanto cabeceó de verdad (±11° en temporal, contra ±1,5° antes) la
+	# tapa se quedó plana dentro de un barco inclinado y asomó por la cubierta y por el costado.
+	# Medido con `tools/tapa_en_su_sitio.tscn`: el borde se salía 0,30 m de su hueco con la mar de
+	# siempre y 0,81 en temporal.
+	#
+	# Encaja por construcción porque está CORTADA con la forma del casco: mientras viaje con él no
+	# puede asomar por ningún sitio. Lo único que se le ajusta es a qué altura va dentro.
+	add_child(_tapa)
+	print("%s: tapa de sentina de %d lados, %.2f x %.2f m"
+		% [nombre, contorno.size(), _ancho_de(contorno, true), _ancho_de(contorno, false)])
+
+
+## La forma del casco a la altura del agua, en ejes del barco: se saca de su MALLA.
+##
+## Se probaron antes dos caminos peores. Rayos desde crujía hacia fuera: no encuentran nada, 0 de
+## 64, porque la colisión del casco es la caja del propio `CharacterBody3D` y Godot descarta los
+## golpes que nacen dentro de una forma convexa. Rayos desde fuera hacia dentro: encuentran esa
+## misma caja, que es un prisma tan largo como el barco, y la tapa salía de 11,64 m en un casco
+## que a la altura del agua no llega a ocho — asomaba por la roda y por el codaste.
+##
+## La malla dice la verdad: se toma la banda de vértices que está a la altura de la lámina y, por
+## rebanadas a lo largo de la eslora, el ancho que tiene ahí. Donde no hay vértices en esa banda
+## es que el casco ya se acabó, y la tapa se acaba con él.
+## Medio ancho del casco a la altura del agua, rebanada a rebanada a lo largo de la eslora, y
+## entre qué z del barco va. Todo en ejes del barco y sacado de la MALLA.
+##
+## Es el perfil real de la flotación, y lo usan las dos cosas que necesitan saber por dónde corta
+## el casco el agua: el recorte del mar y la tapa de sentina. `recorte_radio` no vale para esto —
+## describe la silueta en CUBIERTA, que en esta balandra mide 3,8 x 12 m contra los 2,43 x 10,41
+## de la flotación, o sea 70 cm de más por banda: recortando con ella se abre un hueco de mar
+## alrededor del barco.
+func _anchos_en_la_flotacion() -> Dictionary:
+	if _anchos_fallo:
+		return {}
+	if not _anchos.is_empty():
+		return {"lo": _anchos_z.x, "hi": _anchos_z.y, "ancho": _anchos}
+	var mi := _malla(colision_casco)
+	if mi == null or mi.mesh == null:
+		push_warning("%s: sin malla '%s', no se puede medir la flotación" % [nombre, colision_casco])
+		return {}
+	var a_local := _relativo(mi)
+	# La lámina en REPOSO, no la de ahora: `global_position.y` sube y baja con la ola, así que
+	# midiendo con ella la banda cae donde toque ese frame. Medido, la lancha llegó a dar un casco
+	# de 0,11 x 1,26 m, y un barco lejano —hundido por la curvatura— no daba nada y soltaba un
+	# aviso por frame.
+	var y_agua: float = Oleaje.nivel - altura_flotacion
+	var lo := INF
+	var hi := -INF
+	var puntos: Array[Vector2] = []
+	for v in mi.mesh.get_faces():
+		var p: Vector3 = a_local * v
+		if absf(p.y - y_agua) > BANDA_TAPA:
+			continue
+		puntos.append(Vector2(p.x, p.z))
+		lo = minf(lo, p.z)
+		hi = maxf(hi, p.z)
+	if puntos.size() < 32 or hi <= lo:
+		push_warning("%s: el casco no tiene malla a la altura del agua" % nombre)
+		# Se marca el intento para no repetir el aviso en cada frame: quien pregunta es el mar, y
+		# pregunta sesenta veces por segundo.
+		_anchos_z = Vector2.ZERO
+		_anchos = PackedFloat32Array()
+		_anchos_fallo = true
+		return {}
+	var n := LADOS_TAPA / 2
+	var ancho := PackedFloat32Array()
+	ancho.resize(n)
+	ancho.fill(0.0)
+	for p in puntos:
+		var k: int = clampi(int((p.y - lo) / (hi - lo) * float(n - 1) + 0.5), 0, n - 1)
+		ancho[k] = maxf(ancho[k], absf(p.x))
+	# Una rebanada vacía entre dos llenas es un hueco del modelo, no el final del casco.
+	for k in n:
+		if ancho[k] > 0.0:
+			continue
+		for salto in range(1, n):
+			var izq: float = ancho[maxi(k - salto, 0)]
+			var der: float = ancho[mini(k + salto, n - 1)]
+			if izq > 0.0 or der > 0.0:
+				ancho[k] = minf(izq if izq > 0.0 else der, der if der > 0.0 else izq)
+				break
+	_anchos = ancho
+	_anchos_z = Vector2(lo, hi)
+	print("%s: flotación medida, %.2f x %.2f m en %d rebanadas"
+		% [nombre, _ancho_max(ancho) * 2.0, hi - lo, n])
+	return {"lo": lo, "hi": hi, "ancho": ancho}
+
+
+func _ancho_max(a: PackedFloat32Array) -> float:
+	var m := 0.0
+	for v in a:
+		m = maxf(m, v)
+	return m
+
+
+func _medir_silueta() -> PackedVector2Array:
+	var m := _anchos_en_la_flotacion()
+	if m.is_empty():
+		return PackedVector2Array()
+	var lo: float = m["lo"]
+	var hi: float = m["hi"]
+	var ancho: PackedFloat32Array = m["ancho"]
+	var n := LADOS_TAPA / 2
+
+	# Recortada a la zona que hace falta tapar, si el barco la declara.
+	var z0 := lo
+	var z1 := hi
+	if zona_interior != Vector2.ZERO:
+		z0 = maxf(lo, zona_interior.x)
+		z1 = minf(hi, zona_interior.y)
+		if z1 <= z0:
+			z0 = lo
+			z1 = hi
+	var out := PackedVector2Array()
+	var derecha := PackedVector2Array()
+	var izquierda := PackedVector2Array()
+	for k in n:
+		var z: float = lo + (hi - lo) * float(k) / float(n - 1)
+		if z < z0 or z > z1:
+			continue
+		var w: float = maxf(ancho[k] - MARGEN_TAPA, 0.02)
+		derecha.append(Vector2(w, z))
+		izquierda.append(Vector2(-w, z))
+	if derecha.size() < 3:
+		return PackedVector2Array()
+	out.append_array(derecha)
+	for k in range(izquierda.size() - 1, -1, -1):
+		out.append(izquierda[k])
+	return out
+
+
+func _ancho_de(c: PackedVector2Array, en_x: bool) -> float:
+	var lo := INF
+	var hi := -INF
+	for p in c:
+		var v: float = p.x if en_x else p.y
+		lo = minf(lo, v)
+		hi = maxf(hi, v)
+	return hi - lo
+
+
+## Pone la tapa a su altura dentro del casco cada frame: por encima de la ola, sin llegar a la
+## cubierta. Del rumbo, el cabeceo y la escora no se ocupa nadie: es hija del barco.
+##
+## **Plana y alta, no ondulada.** Se probó darle la forma del agua con el mismo shader del
+## oleaje, para que quedase pegada a la lámina esté donde esté la ola, y el resultado fue peor:
+## en Gerstner el punto no solo sube, se CORRE hacia la cresta hasta sesenta centímetros en
+## horizontal, y ese arrastre sacaba la tapa fuera del casco. Se veía como una mancha oscura
+## flotando junto al barco — y se supo que era ella, y no una sombra, apagándola y repitiendo la
+## misma foto.
+##
+## Plana, lo que hay que evitar es que la ola la pase por encima, y para eso se levanta por
+## encima de la lámina lo que dé de sí la mar. Sitio hay: entre el agua y la cubierta de esta
+## balandra median 1,17 m.
+func _mover_tapa() -> void:
+	if _tapa == null:
+		return
+	var g := global_transform
+	# A qué altura le tocaría ir: sobre la lámina que hay bajo el barco. Como la tapa es hija del
+	# casco, se pide en su Y LOCAL; y no hay que restar la curvatura del horizonte, que el casco ya
+	# lleva puesta en su propia posición.
+	# La altura del agua se toma PROMEDIADA sobre la rejilla de flotación, no en un punto: el casco
+	# flota sobre esa media, y si la tapa mira un punto suelto las dos leen superficies distintas y
+	# la tapa sube y baja dentro de la bodega sin motivo. Medido: la deriva pasa de 0,46 a 0,15 m
+	# con la mar de siempre, y lo que se veía moverse por las rejillas de la escotilla era eso.
+	var y: float = _agua_media + ALZA_TAPA
+	var nominal: float = ALZA_TAPA + Oleaje.nivel - altura_flotacion
+	# El tope no es cosmético: por arriba está la cubierta —a 1,64 m del origen en esta balandra, y
+	# la tapa con su faldón ocupa hasta 1,46 con el margen entero gastado— y por abajo la lámina,
+	# que si pasa la tapa deja ver el mar dentro. Sin él, en temporal la tapa derivaba 1,83 m y se
+	# iba por encima de la cubierta.
+	_tapa.position.y = clampf(y - g.origin.y, nominal - MARGEN_ALTO_TAPA,
+		nominal + MARGEN_ALTO_TAPA)
+
+
+## Lo que el barco se tumba por navegar, aparte de lo que le hace la ola: el viento en las velas
+## y la fuerza centrífuga del giro. En radianes, positivo = estribor arriba.
+##
+## **Los dos salen de la misma cuenta física**, que es lo que los hace coherentes entre sí:
+##
+##     par escorante = par adrizante
+##     M                = peso · GM · sen(φ)     →     tan(φ) = (M / peso) / GM
+##
+## Para el GIRO, el par es la fuerza centrífuga por su brazo: `m · (v²/R) · brazo`. Y `v²/R` no
+## hay que calcularlo con el radio de la curva, que no se conoce: es `v · ω`, la velocidad por la
+## velocidad angular, las dos medidas. Al dividir entre el peso, **la masa se cancela** — dos
+## barcos de la misma forma y distinta carga se tumban igual en la misma curva, y eso es un
+## resultado, no una simplificación.
+##
+## Esto es además lo que hace que la escora del giro NO sea un salto: ω no aparece de golpe al
+## tocar el timón, crece según el barco empieza a virar de verdad, y con poca arrancada no crece
+## casi nada. Antes era un número atado directamente al timón y se notaba brusco.
+##
+## Para el VIENTO, el par va con el CUADRADO de la componente de través del viento aparente —la
+## fuerza sobre una vela va con el cuadrado de la velocidad— por el trapo que haya arriba. En
+## popa cerrada un velero no escora por mucho que empuje, porque el empuje va en el plano de
+## crujía.
+func _escora_de_navegacion() -> float:
+	var lado := transform.basis.x
+	var lado2 := Vector2(lado.x, lado.z)
+	if lado2.length() < 0.001:
+		return 0.0
+	lado2 = lado2.normalized()
+	var ap: Vector3 = Viento.aparente(velocity)
+	# Componente por el través en fracción de la velocidad del viento. Sale NEGATIVA cuando el
+	# viento sopla hacia babor, y entonces el barco se tumba a babor, o sea estribor arriba: por
+	# eso el signo se invierte.
+	var traves: float = Vector2(ap.x, ap.z).dot(lado2) / maxf(Viento.velocidad_m_s, 0.01)
+	# El par escorante decae con el COSENO AL CUADRADO de la escora: el barco tumbado le presenta
+	# menos vela al viento y la fuerza deja de tirar por el través. Sin esto, con el viento a
+	# fuerza 1,9 de la escena de temporal la balandra se acostaba 32° y ahí se quedaba, con la
+	# regala dentro del agua; con la mar normal no cambia nada (a 4° el coseno vale 0,995).
+	var cos2: float = cos(_escora) * cos(_escora)
+	var m_viento := -brazo_velico * traves * absf(traves) * _factor_velas() * cos2
+	# El signo del giro está MEDIDO, no razonado: ver `tools/escora.tscn`, que lo mide con la
+	# escora del viento apagada porque si no se leen las dos mezcladas y sale al revés.
+	var m_giro := -velocidad * _omega * brazo_giro / 9.81
+	return atan((m_viento + m_giro) / maxf(altura_metacentrica, 0.05))
+
+
+## Periodo propio de BALANCE, en segundos: la fórmula de la OMI (criterio de viento y balance,
+## Código IS 2008), `T = 2·C·B / √GM`, con `C = 0,373 + 0,023·B/d − 0,043·L/100`.
+##
+## **Valía 2 s puestos a mano, y con eso el casco AMPLIFICABA las rachas.** El viento racha a 0,11,
+## 0,30 y 0,53 Hz, y un balance de 0,5 Hz sigue la más rápida casi entera: medido con
+## `tools/escora_dinamica.tscn`, el viento pedía de 1,5° a 7,5° y el casco iba de 0,1° a 9,3°, a
+## 9,3 °/s — un barco de carga dando bandazos de bote. Con la manga, el calado y la GM de esta
+## balandra salen 3,9 s: lo que un casco de 12 m con su peso tarda de verdad en ir y volver.
+##
+## Manga y eslora en la flotación son las de la elipse de flotación, que es lo que ya flota.
+func periodo_balance() -> float:
+	var manga: float = recorte_radio.x * 2.0
+	var eslora: float = recorte_radio.y * 2.0
+	var c: float = 0.373 + 0.023 * manga / maxf(calado, 0.05) - 0.043 * eslora / 100.0
+	return 2.0 * c * manga / sqrt(maxf(altura_metacentrica, 0.05))
+
+
+## Arrancada mínima, en m/s, para virar POR AVANTE: cruzar el ojo del viento sin empuje y salir
+## al otro lado aún andando. Sale de la física del propio casco, no de un número:
+##
+## - lo que hay que recorrer sin empuje es el arco de la zona muerta entera, `R · 2·angulo_muerto`,
+##   con `R = velocidad_max / velocidad_giro` el radio de giro con la caña a la banda;
+## - sin empuje frena el agua con el cuadrado de la velocidad, y así la velocidad cae de forma
+##   EXPONENCIAL con la distancia: `v(s) = v₀ · exp(−s · aceleracion / velocidad_max²)`;
+## - y hay que llegar con más arrancada de la que el viento de proa le quita ciando, o el timón se
+##   queda sin agua: el doble de la velocidad de equilibrio de `cia_en_el_ojo`.
+##
+## En la balandra son 14 m de arco y 0,88 m/s. Con la `aceleracion` de 2 m/s² que tuvo —siete
+## veces lo que su peso permite— salían 2,9, ceñía a 1,6, y el capitán perdía la virada en el ojo
+## 25° antes de cruzarlo.
+func velocidad_para_virar() -> float:
+	var radio: float = velocidad_max / maxf(velocidad_giro, 0.01)
+	var arco: float = radio * deg_to_rad(2.0 * angulo_muerto)
+	var v_salida: float = 2.0 * velocidad_max * cia_en_el_ojo * maxf(Viento.fuerza, 0.05)
+	return v_salida * exp(arco * aceleracion / maxf(velocidad_max * velocidad_max, 0.01))
+
+
+## Velocidad de guiñada que el casco lleva, en rad/s, positiva hacia babor (el sentido de
+## `rotate_y`). Pública para quien gobierna: con inercia, hay que aguantar el giro antes de llegar.
+func guinada() -> float:
+	return _guinada
+
+
+## Velocidad angular del casco, en rad/s, medida de su propio rumbo. Se filtra un poco porque
+## derivar un ángulo frame a frame es ruidoso y ese ruido acabaría en la escora.
+func _medir_giro(delta: float) -> void:
+	if delta <= 0.0:
+		return
+	var proa := -transform.basis.z
+	var rumbo := atan2(proa.x, proa.z)
+	var w := wrapf(rumbo - _rumbo_previo, -PI, PI) / delta
+	_rumbo_previo = rumbo
+	_omega += (w - _omega) * clampf(delta / 0.15, 0.0, 1.0)
+
+
+## Hacia dónde tira la propulsión: la proa, pero en el plano del agua.## Hacia dónde tira la propulsión: la proa, pero en el plano del agua.
+##
+## No vale `-basis.z` a secas desde que el casco cabecea: con la proa 2,5° arriba, esa dirección
+## lleva medio metro por segundo de subida que no existe, y el barco se propulsaría hacia el
+## cielo. Un barco avanza sobre el agua, no hacia donde mira su roda.
+func _proa_horizontal() -> Vector3:
+	var p := -transform.basis.z
+	p.y = 0.0
+	return p.normalized() if p.length() > 0.001 else -transform.basis.z
+
+
+## Pone el cabeceo y la escora que pide la ola, conservando el rumbo.
+##
+## Se reconstruye la base entera en vez de ir girando sobre los ejes locales, que acumularía
+## error. Y el rumbo se LEE de la base en vez de guardarse aparte: `rotate_y()` gira sobre el eje
+## Y del padre, así que el timón sigue sumando al ángulo de rumbo por mucho que el casco esté
+## inclinado, y el orden de Euler que Godot usa por defecto (YXZ) lo devuelve limpio. Así el
+## timón, el sesgo de velas y todo lo que gira el barco siguen funcionando sin tocarlos.
+func _aplicar_inclinacion() -> void:
+	var eu := transform.basis.get_euler()
+	transform.basis = Basis.from_euler(Vector3(_cabeceo, eu.y, _escora))
+
+
 ## Y a la que va el casco: su altura de flotación, el bamboleo, y la CURVATURA de la Tierra.
 ##
 ## La curvatura es lo que hace que un barco lejano se hunda de abajo arriba —primero el casco,
@@ -198,7 +762,7 @@ var _alto := 0.0
 ## distancia es de metros y la caída va con el CUADRADO de ella — a 100 m son ocho décimas de
 ## milímetro.
 func _altura_de_flotacion() -> float:
-	var y := base_y + sin(time * BOB_SPEED) * BOB_AMPLITUDE
+	var y := _y_mar
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
 		return y
@@ -208,6 +772,233 @@ func _altura_de_flotacion() -> float:
 	if _alto > 0.0:
 		visible = hundido < _alto
 	return y - hundido
+
+
+## El perfil del casco en la flotación: medio ancho por rebanada, en metros y en ejes del barco.
+## Lo usa la tapa de sentina para cortar su silueta, y la batería para comprobar que la caja del
+## recorte se queda por dentro del forro.
+func perfil_de_flotacion() -> PackedFloat32Array:
+	_anchos_en_la_flotacion()
+	return _anchos
+
+
+## La silueta del casco en la flotación: {lo, hi, ancho} —z de la proa y de la popa en ejes del
+## barco, y medio ancho por rebanada—, o vacío si no se pudo medir. La usa la estela.
+func silueta_de_flotacion() -> Dictionary:
+	return _anchos_en_la_flotacion()
+
+
+## La caja con la que se recorta el agua, en ejes del barco: **la bodega tal cual**.
+##
+## El usuario lo pidió con estas palabras —"si hacemos que el corte coincida con la bodega es
+## suficiente"— y resulta que además es lo que arregla las dos mitades del defecto de golpe:
+##
+## - **No puede asomar por el costado.** La caja y el casco están los dos en ejes del barco, así
+##   que giran juntos: lo que está dentro del casco lo está en cualquier pose. Antes el recorte
+##   tomaba su planta del CASCO —2,09 m de manga contra 3,30, apenas 60 cm de holgura por banda— y
+##   cualquier escora lo sacaba por el forro. La bodega deja 0,50 m a cada lado (semimanga 1,148
+##   contra 1,65 del casco en la flotación) y no hay nada que se desplace respecto a nada.
+## - **No deja un agujero bajo un barco levantado.** El recorte llevaba un margen vertical de
+##   CINCO METROS (`recorte_margen_v`), así que al subir el casco sobre una cresta seguía borrando
+##   agua muy por debajo de él, donde ya no hay casco que tape el hueco — y eso es lo que se veía
+##   como una mancha lisa junto al barco en el mar de tormenta. Con la caja de la bodega, si el
+##   agua queda por debajo de su suelo simplemente no se recorta: y no hace falta, porque ahí la
+##   tapa el propio suelo de la bodega.
+##
+## Y por qué hay que recortar algo, habiendo bodega: **el agua se mete DENTRO de ella**. Su suelo
+## está 0,182 m sobre la lámina en reposo (0,650 contra 0,468) y el casco se separa de la ola
+## 0,069 m de media y 0,205 el peor con la mar de siempre, 0,358 y 1,19 en temporal. Cuando la
+## supera, por la rejilla se ve mar en el hueco ENTERO — medido, el 14,7 % del encuadre que ocupa
+## la rejilla, contra el 1,7 % de las escotillas centrales, que están más cerca del centro de
+## cabeceo y casi nunca llegan a esa condición.
+##
+## Devuelve [] si este casco no declara bodega o no se encuentra: entonces no se recorta nada.
+func caja_recorte() -> Array:
+	if _caja_fallo:
+		return []
+	if _caja_bodega != AABB():
+		return [_caja_bodega.position, _caja_bodega.end]
+	if malla_bodega == "":
+		_caja_fallo = true
+		return []
+	var mi := _malla(malla_bodega)
+	if mi == null or mi.mesh == null:
+		push_warning("%s: no encuentro la malla de bodega '%s'" % [nombre, malla_bodega])
+		_caja_fallo = true
+		return []
+	_caja_bodega = _relativo(mi) * mi.mesh.get_aabb()
+	print("%s: recorte del agua por la bodega, %.2f x %.2f m, de y=%.2f a %.2f"
+		% [nombre, _caja_bodega.size.x, _caja_bodega.size.z,
+			_caja_bodega.position.y, _caja_bodega.end.y])
+	return [_caja_bodega.position, _caja_bodega.end]
+
+
+## Reparte los puntos de flotación por el plano de flotación del casco: una rejilla REGULAR,
+## del mismo paso en las dos direcciones, recortada a la elipse de `recorte_radio`.
+##
+## La rejilla es regular y el peso de cada punto el mismo a propósito: así el reparto de fuerzas
+## sale de la FORMA del casco y no de una ponderación escrita a mano — donde el barco es ancho
+## caben más puntos y ahí empuja más, que es lo que hace el agua. Los extremos de proa y popa se
+## llevan pocos, que es justo lo que les corresponde por lo fino que es el casco ahí.
+##
+## Se calcula una vez: no cambia con la ola ni con el rumbo.
+func _repartir_flotacion() -> void:
+	_flotacion.clear()
+	_flot_w = 0.0
+	_flot_x2 = 0.0
+	_flot_z2 = 0.0
+	var n: int = maxi(muestras_flotacion, 3)
+	var paso: float = recorte_radio.y * 2.0 / float(n)
+	var filas: int = maxi(int(round(recorte_radio.x * 2.0 / maxf(paso, 0.01))), 1)
+	for j in n:
+		# Centro de cada estación, no su borde: con los bordes el primer punto cae en la punta de
+		# la proa, donde el casco no tiene manga y no hay nada que flote.
+		var z: float = -recorte_radio.y + paso * (float(j) + 0.5)
+		var u: float = z / recorte_radio.y
+		var semi: float = recorte_radio.x * sqrt(maxf(1.0 - u * u, 0.0))
+		for i in filas:
+			var x: float = -recorte_radio.x + recorte_radio.x * 2.0 * (float(i) + 0.5) / float(filas)
+			if absf(x) > semi:
+				continue          # fuera del casco: ahí no hay obra viva
+			_flotacion.append(Vector3(x, 0.0, z))
+			_flot_w += 1.0
+			_flot_x2 += x * x
+			_flot_z2 += z * z
+	# Un casco tan fino que no recoge ningún punto no puede flotar: al menos el del centro.
+	if _flotacion.is_empty():
+		_flotacion.append(Vector3.ZERO)
+		_flot_w = 1.0
+	_flot_x2 = maxf(_flot_x2, 0.01)
+	_flot_z2 = maxf(_flot_z2, 0.01)
+	print("%s: %d puntos de flotación, paso %.2f m (%d estaciones x %d de banda)"
+		% [nombre, _flotacion.size(), paso, n, filas])
+
+
+## Flota el casco sobre la ola: lee el agua bajo cada punto de flotación y de ahí saca a qué
+## altura queda, cuánto cabecea y cuánto escora. Se llama al principio del paso de física.
+##
+## **Por qué una rejilla de puntos y no la proa, la popa y las dos bandas.** Con cuatro puntos, el
+## cabeceo salía de restar la altura del agua en dos puntos separados una ESLORA entera, y dos
+## puntos separados una longitud de onda leen lo mismo: una ola de doce metros —de las que este
+## mar tiene— se anulaba entera, y las más cortas, que son las de más pendiente, se quedaban a la
+## mitad. Medido con `tools/cabeceo_en_la_mar.tscn`: con la mar de proa, dos puntos le pedían al
+## casco 6,33° de pico a pico donde el agua bajo él tenía 13,1. Con la rejilla, 9,26.
+##
+## **Y el signo del cabeceo estaba al revés.** Girar +X en Godot sube la proa, que está en −Z, y
+## la fórmula de los cuatro puntos hacía lo contrario: el parecido entre lo que el casco cabeceaba
+## y lo que la ola le pedía salía **−0,82** en los cinco rumbos, contra +0,73 de la escora. O sea
+## que el casco metía la proa justo cuando la ola se la levantaba, y por eso de proa a popa no se
+## veía mar y de banda a banda sí. Ahora no hay signo que elegir: la inclinación sale del EMPUJE,
+## y un punto que se hunde levanta su lado.
+##
+## **El casco tiene masa: es un muelle amortiguado, no un filtro.** Cada punto aporta empuje según
+## lo hundido que esté (la hidrostática linealizada, que es lo que vale cerca de la flotación),
+## eso da una aceleración en arfada, cabeceo y balance, y se integra. De ahí sale solo lo que un
+## filtro de primer orden no puede dar: la proa se queda colgando al pasar la cresta, cae después
+## con más fuerza de la que la ola pide, se hunde de más y vuelve a flote balanceándose hasta que
+## se calma. Lo que lo remata es el tope de emersión: un punto que sale del agua no puede perder
+## más empuje del que tenía (`calado`), así que colgando sobre la cresta el casco solo tiene su
+## peso, como pasa de verdad.
+##
+## Los puntos se leen EN PLANTA —el casco se apoya en la ola, no en su propia inclinación— pero su
+## altura sí lleva la inclinación de ahora: eso es lo que cierra el lazo y hace de muelle.
+func _seguir_al_mar(delta: float) -> void:
+	if _flotacion.is_empty():
+		_repartir_flotacion()
+	var g := global_transform
+	var proa := -g.basis.z
+	var lado := g.basis.x
+	var ph := Vector2(proa.x, proa.z)
+	var lh := Vector2(lado.x, lado.z)
+	if ph.length() < 0.001 or lh.length() < 0.001:
+		return
+	ph = ph.normalized()
+	lh = lh.normalized()
+	var c := Vector2(g.origin.x, g.origin.z)
+	# Altura de la lámina en cada punto, y la del propio casco ahí con la inclinación de ahora.
+	# Con el orden de Euler de Godot (YXZ) y ángulos de pocos grados, un punto (x, z) del plano de
+	# flotación queda a `y + x·sen(escora) − z·sen(cabeceo)`: +X sube la proa (−Z) y +Z sube
+	# estribor (+X).
+	var sc := sin(_cabeceo)
+	var se := sin(_escora)
+	var sum_d := 0.0
+	var mojados := 0
+	var mom_cab := 0.0
+	var mom_esc := 0.0
+	var sum_ola := 0.0
+	var ola_cab := 0.0
+	var ola_esc := 0.0
+	for pt in _flotacion:
+		var h: float = Oleaje.altura_en(c + ph * pt.z * -1.0 + lh * pt.x)
+		# OJO al signo de z: el punto está a `pt.z` en ejes del barco, donde la proa es −Z, así que
+		# avanzar hacia proa es restar por `ph`.
+		var y_pt: float = _y_mar - altura_flotacion + Oleaje.nivel + pt.x * se - pt.z * sc
+		# Emersión limitada al calado: fuera del agua no hay más empuje que perder.
+		var d: float = maxf(h - y_pt, -calado)
+		if h > y_pt:
+			mojados += 1
+		sum_d += d
+		mom_cab += d * -pt.z
+		mom_esc += d * pt.x
+		var ho := h - (Oleaje.nivel)
+		sum_ola += ho
+		ola_cab += ho * -pt.z
+		ola_esc += ho * pt.x
+	# Pendientes: la que el empuje pide ahora mismo, y la que tendría el agua sola. La segunda es
+	# la que permite obedecer a medias sin tocar el muelle — ver `obediencia_escora`.
+	var pend_cab := mom_cab / _flot_z2
+	var pend_esc := mom_esc / _flot_x2
+	var pend_cab_ola := ola_cab / _flot_z2
+	var pend_esc_ola := ola_esc / _flot_x2
+	var err_y := sum_d / _flot_w
+	_agua_media = sum_ola / _flot_w + Oleaje.nivel
+	var err_cab := pend_cab + (obediencia_cabeceo - 1.0) * pend_cab_ola
+	var err_esc := pend_esc + (obediencia_escora - 1.0) * pend_esc_ola
+
+	# La escora de NAVEGACIÓN (viento y giro) es un ángulo de equilibrio, no una fuerza: se le pide
+	# al muelle como un desplazamiento del cero. Así sigue saliendo de `altura_metacentrica` y toda
+	# su física medida, y de paso se gana que llegue balanceándose en vez de de golpe.
+	err_esc += sin(_escora_de_navegacion())
+
+	# La frecuencia de ARFADA no se elige: un cuerpo que flota oscila a `sqrt(g/calado)`, y de ahí
+	# sale que con el casco ENTERO fuera del agua —`sum_d` saturado a `-calado` en todos los
+	# puntos— la aceleración valga exactamente `-g`. Es decir, que caiga como cae cualquier cosa.
+	# Con un periodo puesto a mano no cuadraba: 1,6 s da 7,7 m/s² en vez de 9,81.
+	var w_y: float = sqrt(9.81 / maxf(calado, 0.05))
+	var w_c: float = TAU / maxf(periodo_cabeceo, 0.05)
+	var w_e: float = TAU / periodo_balance()
+	# **La amortiguación va con lo que esté MOJADO.** La frena el agua, así que donde no hay agua no
+	# frena: con el casco al aire el término de amortiguación seguía actuando y lo sostenía —medido,
+	# caía a 1,67 m/s² con la mar de siempre y a 5,92 en temporal, contra los 9,81 que le tocan—, y
+	# eso es exactamente lo que se ve como un barco que vuela sobre el seno entre dos olas.
+	#
+	# **Salvo el BALANCE**, que no lo frenan los puntos de la flotación sino la QUILLA —honda, va
+	# siempre mojada— y las velas contra el aire. Con la amortiguación recortada por lo mojado, en
+	# cuanto la ola dejaba media banda en el aire el balance se quedaba sin freno y el casco se
+	# tumbaba MÁS que lo que pedía la racha: medido con `tools/escora_dinamica.tscn`, 6,63° de pico a
+	# pico contra 6,01 pedidos, y con el freno entero 4,06° a 2,9 °/s en vez de 5,8.
+	var f_moj: float = float(mojados) / _flot_w
+	if not _mar_leido:
+		# Primer paso: se coloca donde le toca sin oscilación, o el barco nace dando un salto.
+		_mar_leido = true
+		_y_mar += err_y
+		_cabeceo += err_cab
+		_escora += err_esc
+		_v_arfada = 0.0
+		_v_cabeceo = 0.0
+		_v_escora = 0.0
+		return
+	# Euler semi-implícito: con w·dt por debajo de 0,1 (1,6 s de periodo a 60 Hz da 0,065) es
+	# estable de sobra y no hace falta nada más fino.
+	_v_arfada += (w_y * w_y * err_y
+		- 2.0 * amortiguacion_arfada * w_y * _v_arfada * f_moj) * delta
+	_v_cabeceo += (w_c * w_c * err_cab
+		- 2.0 * amortiguacion_cabeceo * w_c * _v_cabeceo * f_moj) * delta
+	_v_escora += (w_e * w_e * err_esc
+		- 2.0 * amortiguacion_balance * w_e * _v_escora) * delta
+	_y_mar += _v_arfada * delta
+	_cabeceo += _v_cabeceo * delta
+	_escora += _v_escora * delta
 
 
 ## Alto del barco, del casco al tope, medido de sus mallas. Diferido porque el modelo se
@@ -234,11 +1025,15 @@ func _ready() -> void:
 	# Cada barco flota a SU altura (una balandra grande no flota igual que la lancha).
 	position.y = altura_flotacion
 	base_y = altura_flotacion
+	_y_mar = altura_flotacion
+	_repartir_flotacion()
 	# NO se anuncia solo como el del jugador. Lo hacía en su `_ready`, y con eso el segundo
 	# barco de la escena se declaraba "activo": el mar, el HUD, la cámara y las flechas de
 	# viento se iban con el enemigo. Quién es el barco del jugador lo decide quien le sube el
 	# jugador a bordo — `tomar_mando_jugador()`.
 	_medir_alto.call_deferred()
+	if tapa_sentina:
+		_poner_tapa.call_deferred()
 	_preparar_timon()
 	for h in get_children():
 		if h.has_method("izar"):
@@ -280,31 +1075,92 @@ func _process(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	time += delta
+	_medir_giro(delta)
+	_seguir_al_mar(delta)
 
 	if anclado:
 		# Anclado: frena y se queda quieto (solo el balanceo del oleaje). No gira ni avanza.
 		velocidad = move_toward(velocidad, 0.0, aceleracion * 3.0 * delta)
-		velocity = -transform.basis.z * velocidad
+		velocity = _proa_horizontal() * velocidad
+		_guinada = 0.0
 		move_and_slide()
 		position.y = _altura_de_flotacion()
+		_aplicar_inclinacion()
+		_mover_tapa()
 		return
 
-	# Timón: eficacia según la velocidad (más rápido = gira mejor).
-	var giro := orden_timon
-	var vel_norm := clampf(absf(velocidad) / maxf(0.01, velocidad_max), 0.0, 1.0)
-	var giro_efectivo := velocidad_giro * (giro_minimo + (1.0 - giro_minimo) * vel_norm)
-	rotate_y(giro * giro_efectivo * delta)
-
+	# **El timón no mueve el barco: desvía el agua que pasa por él.** Sin arrancada no pasa agua y
+	# no hay gobierno; con arrancada atrás el agua lo ataca por la otra cara y la caña obra al
+	# revés. Por eso el giro va con la velocidad CON SIGNO y sin mínimo ninguno.
+	#
+	# Y es lineal a propósito: un barco con la caña a una banda describe un círculo de RADIO
+	# constante, así que su velocidad angular es `v/R` — proporcional a la velocidad. Aquí el radio
+	# sale de los dos números que ya había, `velocidad_max / velocidad_giro`, y son 10 m.
+	#
+	# Antes había un `giro_minimo` del 20 %, y con él el barco giraba parado: medido con
+	# `tools/gobierno.tscn`, **−0,72 °/s sin velas y quieto, y −5,15 °/s de proa al viento**, que
+	# es lo que se veía como un barco que da vueltas sobre sí mismo en el ojo del viento con solo
+	# mantener la caña a una banda.
+	var vel_rel := clampf(velocidad / maxf(0.01, velocidad_max), -1.0, 1.0)
+	var vel_norm := absf(vel_rel)
+	var pide := orden_timon * velocidad_giro * vel_rel
 	# Sesgo de giro por balance de velas (trasera → orza; delantera → arriba).
-	_aplicar_sesgo_velas(vel_norm, delta)
+	pide += _sesgo_velas(vel_norm)
+	# Lo que piden timón y velas es un PAR, no un giro: el casco lo coge con su inercia.
+	_guinada += (pide - _guinada) * clampf(delta / maxf(inercia_guinada, 0.01), 0.0, 1.0)
+	rotate_y(_guinada * delta)
 
 	# Propulsión: viento × ángulo × superficie de vela abierta.
 	var objetivo := velocidad_max * factor_viento() * Viento.fuerza * _factor_velas()
-	velocidad = move_toward(velocidad, objetivo, aceleracion * delta)
+	# **El viento por la proa empuja hacia atrás, y hay que restarlo SIEMPRE.** La vela deja pasar
+	# el viento cuando flamea, pero el aparejo, los palos y la obra muerta siguen recibiéndolo, y
+	# eso hace ciar. Va con lo de cara que venga el viento, no como un caso aparte dentro de la
+	# zona muerta: probado así primero, y el barco se quedaba clavado JUSTO EN EL BORDE —medido con
+	# `tools/porque_no_dispara.tscn`, `factor_viento` positivo pero casi cero, velocidad 0,00
+	# exacta durante 25 s y sin gobierno, porque sin arrancada el timón no hace nada—. Con la
+	# resistencia continua, ahí cía un poco y puede salir.
+	#
+	# Que exista importa más que cuánto valga: es lo que permite salir del ojo del viento, porque
+	# con arrancada atrás la caña obra al revés y el barco cae a la banda que se le pida.
+	var w := Viento.direccion
+	w.y = 0.0
+	if w.length() > 0.001:
+		# 1 = el viento justo de cara, 0 = de través o de popa.
+		var de_cara: float = maxf(_proa_horizontal().dot(-w.normalized()), 0.0)
+		objetivo -= velocidad_max * cia_en_el_ojo * de_cara * Viento.fuerza
+	# **Empuje contra la resistencia del agua, que va con el CUADRADO de la velocidad.** Con los
+	# dos en la misma escala la velocidad de régimen de cada rumbo es exactamente `objetivo`, como
+	# antes; lo que cambia es cómo se llega. Antes era `move_toward` a `aceleracion` constante, igual
+	# para frenar que para arrancar, y aproado a 1,4 m/s el casco se paraba en 0,7 s: no había
+	# virada por avante posible con un casco que tarda en girar. Ahora sin empuje pierde arrancada
+	# poco a poco (`v₀ / (1 + a·v₀·t / v_max²)`), y con todo el empuje arranca a `aceleracion`.
+	var v2 := velocidad_max * velocidad_max
+	velocidad += aceleracion * (objetivo * absf(objetivo) - velocidad * absf(velocidad)) \
+		/ maxf(v2, 0.01) * delta
 
-	velocity = -transform.basis.z * velocidad
+	# **El barco CONSERVA su movimiento: el timón lo guía, no lo empuja.** La velocidad es un
+	# vector con su propia inercia, no un escalar clavado a la proa. Cuando la proa gira, el
+	# movimiento sigue un rato en la dirección de antes y aparece una componente de LADO — la
+	# deriva — que la quilla va disipando en `resistencia_lateral` segundos. Eso es lo que hace que
+	# la popa barra hacia fuera y que la estela salga curva en vez de doblar en escuadra.
+	#
+	# Sin esto el casco pivotaba: medido con `tools/gobierno.tscn`, **0,0° entre la proa y el
+	# movimiento real** durante toda una virada, o sea que el vector velocidad saltaba a la proa
+	# nueva cada paso. El usuario lo describió como "se ve como si el timón empujara en una
+	# dirección", y es exactamente eso: un cambio instantáneo de dirección sin inercia parece un
+	# empujón de lado.
+	var proa_h := _proa_horizontal()
+	var banda := Vector3(-proa_h.z, 0.0, proa_h.x)
+	var v_plano := Vector3(velocity.x, 0.0, velocity.z)
+	# El movimiento de antes, descompuesto en los ejes de AHORA: la parte de lado es la deriva que
+	# el giro acaba de crear.
+	var deriva: float = v_plano.dot(banda)
+	deriva -= deriva * clampf(delta / maxf(resistencia_lateral, 0.01), 0.0, 1.0)
+	velocity = proa_h * velocidad + banda * deriva
 	move_and_slide()
 	position.y = _altura_de_flotacion()
+	_aplicar_inclinacion()
+	_mover_tapa()
 
 
 # ── Acciones (con señal para animar más adelante) ────────────────────────────
@@ -365,27 +1221,28 @@ func _factor_velas() -> float:
 # La trasera abierta tiende a ORZAR (girar hacia el viento); la delantera a ARRIBAR
 # (girar en contra). Con ambas se equilibra. Escala con la velocidad (el giro es
 # consecuencia del movimiento).
-func _aplicar_sesgo_velas(vel_norm: float, delta: float) -> void:
+## Velocidad de giro, en rad/s, que pide el balance de las velas.
+func _sesgo_velas(vel_norm: float) -> float:
 	var s := 0.0
 	if vela_trasera:
 		s -= 1.0   # popa → ORZA (gira hacia el viento)
 	if vela_delantera:
 		s += 1.0   # proa → ARRIBA (aleja del viento; ayuda a salir de la zona muerta)
 	if absf(s) < 0.001 or vel_norm < 0.001:
-		return
+		return 0.0
 	var wind := Viento.direccion
 	wind.y = 0.0
 	if wind.length() < 0.001:
-		return
+		return 0.0
 	var src := (-wind).normalized()   # de dónde viene el viento
 	var bow := -transform.basis.z
 	bow.y = 0.0
 	if bow.length() < 0.001:
-		return
+		return 0.0
 	bow = bow.normalized()
 	# Ángulo con signo de la proa hacia el origen del viento.
 	var ang := atan2(bow.x * src.z - bow.z * src.x, bow.dot(src))
-	rotate_y(clampf(ang, -1.0, 1.0) * s * sesgo_giro_velas * vel_norm * delta)
+	return clampf(ang, -1.0, 1.0) * s * sesgo_giro_velas * vel_norm
 
 
 ## Factor de propulsión [0..1] según el ángulo entre la proa y el viento. Público porque no
@@ -486,6 +1343,7 @@ func _a_gobernar() -> void:
 	if _jugador != null and is_instance_valid(_jugador):
 		_jugador.queue_free()
 	_jugador = null
+	_al_agua = false
 	gobierno = true
 	if camara != null:
 		camara.make_current()
@@ -589,6 +1447,24 @@ func _montar_colisiones() -> void:
 		var ab := _relativo(mi_cub) * mi_cub.mesh.get_aabb()
 		cub_min = ab.position.z if eslora_z else ab.position.x
 		cub_max = cub_min + (ab.size.z if eslora_z else ab.size.x)
+	# --- la franja que ocupa la jarcia, para apartar la barrera de ella
+	var jarcia_de := INF
+	var jarcia_a := -INF
+	var jarcia_lat := 0.0
+	if colision_jarcia != "":
+		for n in find_children(colision_jarcia, "MeshInstance3D", true, false):
+			var mj := n as MeshInstance3D
+			if mj.mesh == null:
+				continue
+			var cj := _relativo(mj) * mj.mesh.get_aabb()
+			var u0: float = cj.position.z if eslora_z else cj.position.x
+			var u1: float = u0 + (cj.size.z if eslora_z else cj.size.x)
+			jarcia_de = minf(jarcia_de, u0)
+			jarcia_a = maxf(jarcia_a, u1)
+			var l0: float = cj.position.x if eslora_z else cj.position.z
+			var l1: float = l0 + (cj.size.x if eslora_z else cj.size.z)
+			jarcia_lat = maxf(jarcia_lat, maxf(absf(l0), absf(l1)))
+
 	for i in hechas:
 		var c: float = centros[i]
 		var alto: float = altos[i]
@@ -607,7 +1483,14 @@ func _montar_colisiones() -> void:
 			var pos_borda := Vector3(lat, (alto + suelo_y) * 0.5, c) if eslora_z else Vector3(c, (alto + suelo_y) * 0.5, lat)
 			var tam_borda := Vector3(colision_grueso_borda, maxf(alto - suelo_y, 0.05), paso) if eslora_z else Vector3(paso, maxf(alto - suelo_y, 0.05), colision_grueso_borda)
 			_caja(pos_borda, tam_borda, Basis(), "Borda_%d_%s" % [i, "b" if lado < 0.0 else "e"])
-			var lat2: float = (manga + colision_grueso_borda * 0.5 + colision_margen_barrera) * lado
+			# La barrera se aparta donde está la jarcia, o tapa la escala por la que se sube.
+			var fuera: float = manga + colision_grueso_borda * 0.5 + colision_margen_barrera
+			if jarcia_lat > 0.0 and c >= jarcia_de and c <= jarcia_a:
+				fuera = maxf(fuera,
+					jarcia_lat + colision_paso_jarcia + colision_grueso_borda * 0.5)
+			if colision_alto_barrera <= 0.0:
+				continue
+			var lat2: float = fuera * lado
 			var pos_bar := Vector3(lat2, alto + colision_alto_barrera * 0.5, c) if eslora_z else Vector3(c, alto + colision_alto_barrera * 0.5, lat2)
 			var tam_bar := Vector3(colision_grueso_borda, colision_alto_barrera, paso) if eslora_z else Vector3(paso, colision_alto_barrera, colision_grueso_borda)
 			_caja(pos_bar, tam_bar, Basis(), "Barrera_%d_%s" % [i, "b" if lado < 0.0 else "e"])
@@ -633,6 +1516,76 @@ func _montar_colisiones() -> void:
 	print("%s: %d triangulos de suelo, %d secciones, %d cajas (eslora en %s, suelo y=%.2f)"
 		% [nombre, suelos, hechas, _cuerpo_colisiones.get_child_count() - colision_mallas_suelo.size(),
 			"z" if eslora_z else "x", suelo_y])
+	_montar_escalas(eslora_z)
+
+
+## Levanta una `EscalaJarcia` por cada grupo de flechastes: por dónde se trepa.
+##
+## Todo sale de las mallas — la subida, de unir el peldano más bajo con el más alto; el lateral,
+## del eje largo de un peldano; el ancho, del más largo de ellos —, así que cualquier casco que
+## traiga jarcia tiene sus escalas sin escribir un número.
+##
+## El área es generosa a propósito (1,4 m de fondo): hay que poder engancharse desde la cubierta,
+## desde la regala y desde fuera, y una caja pegada al plano de la jarcia obligaría a acertar.
+func _montar_escalas(eslora_z: bool) -> void:
+	for patron in colision_escalas:
+		var nodos := find_children(patron, "MeshInstance3D", true, false)
+		if nodos.size() < 2:
+			continue
+		var centros: Array[Vector3] = []
+		var cajas: Array[AABB] = []
+		for n in nodos:
+			var mi := n as MeshInstance3D
+			if mi.mesh == null:
+				continue
+			var c := _relativo(mi) * mi.mesh.get_aabb()
+			cajas.append(c)
+			centros.append(c.get_center())
+		if centros.size() < 2:
+			continue
+		var bajo := centros[0]
+		var cima := centros[0]
+		var ancho := 0.0
+		for i in centros.size():
+			if centros[i].y < bajo.y:
+				bajo = centros[i]
+			if centros[i].y > cima.y:
+				cima = centros[i]
+			# El eje largo del peldano: el mayor lado de su caja, que es el propio cabo.
+			var t := cajas[i].size
+			ancho = maxf(ancho, maxf(t.x, maxf(t.y, t.z)))
+		var subida := (cima - bajo)
+		if subida.length() < 0.5:
+			continue
+		var largo := subida.length()
+		subida = subida.normalized()
+		# Lateral: a lo largo de los peldanos, y perpendicular a la subida para que los dos ejes
+		# no se pisen (un flechaste no es exactamente horizontal ni la escala exactamente vertical).
+		var lateral: Vector3 = Vector3(0, 0, 1) if eslora_z else Vector3(1, 0, 0)
+		lateral = (lateral - subida * lateral.dot(subida)).normalized()
+		# Fuera: perpendicular al plano de la escala, hacia el costado por el que se trepa.
+		var fuera := subida.cross(lateral).normalized()
+		var hacia: float = bajo.x if eslora_z else bajo.z
+		if fuera.dot(Vector3(hacia, 0.0, 0.0) if eslora_z else Vector3(0.0, 0.0, hacia)) < 0.0:
+			fuera = -fuera
+		var e := EscalaJarcia.new()
+		e.name = "Escala_" + String(patron).replace("*", "").rstrip("_")
+		e.dir_subida = subida
+		e.dir_lateral = lateral
+		e.dir_fuera = fuera
+		e.alto = largo
+		e.ancho = ancho * 0.5
+		var cs := CollisionShape3D.new()
+		var caja := BoxShape3D.new()
+		caja.size = Vector3(ancho + 0.8, largo, 1.4)
+		cs.shape = caja
+		cs.transform = Transform3D(Basis(lateral, subida, fuera),
+			subida * (largo * 0.5) + fuera * 0.2)
+		e.add_child(cs)
+		add_child(e)
+		e.transform = Transform3D(Basis(), bajo)
+		print("%s: escala '%s' de %.2f m, %.2f de ancho, sube (%.2f, %.2f, %.2f) desde y=%.2f"
+			% [nombre, e.name, largo, ancho, subida.x, subida.y, subida.z, bajo.y])
 
 
 ## Da a la madera del modelo su relieve. Diferido como todo lo que toca las mallas del `.glb`,
@@ -729,7 +1682,38 @@ func _buscar_camara() -> Camera3D:
 	return l[0] as Camera3D if not l.is_empty() else null
 
 
-func on_interact(_player: Node3D) -> void:
+## El personaje se ha caído al mar: deja de colgar del barco.
+##
+## Va a bordo como HIJO del casco para que la cubierta lo arrastre al navegar — un
+## `CharacterBody3D` vive en espacio de mundo y no sigue a su padre por su cuenta —, y eso mismo
+## es lo que sobra en el agua: colgando del barco, el náufrago viajaría con él a nueve nudos.
+## `reparent` conserva la posición de mundo, así que cae donde cayó.
+##
+## `_jugador` se mantiene apuntando a él a propósito: el barco sigue en modo "a pie" y F sigue
+## devolviendo el timón, que es la salida si uno se queda flotando lejos.
+func hombre_al_agua(jug: Node3D) -> void:
+	if jug == null or jug.get_parent() != self:
+		return
+	var mundo := get_parent()
+	if mundo == null:
+		return
+	jug.reparent(mundo, true)
+	_al_agua = true
+	print("%s: hombre al agua en %v" % [nombre, jug.global_position])
+
+
+## Vuelve a bordo al que se cayó, o el enganche de siempre si ya estaba en cubierta.
+##
+## Se entra por el rayo de interacción del propio personaje (su `collision_mask` incluye la capa
+## del casco), así que basta nadar hasta el costado y mirar al barco.
+func on_interact(player: Node3D) -> void:
+	if _al_agua and player != null and player == _jugador:
+		player.reparent(self, true)
+		var base: Vector3 = helm_position.position if helm_position != null else Vector3(0, 2.0, 0)
+		(player as Node3D).position = base + Vector3.UP * altura_capsula
+		_al_agua = false
+		print("%s: el náufrago vuelve a bordo" % nombre)
+		return
 	# Punto de enganche para cuando el jugador suba al timón.
 	print("El jugador subió al timón del barco.")
 
@@ -816,8 +1800,10 @@ func apuntar(que_banda: String) -> void:
 ## al ratón (que da movimiento relativo) y a un capitán de IA corrigiendo el tiro.
 func apuntar_fino(dgiro: float, delev: float) -> void:
 	for c in canones_de(banda_apuntada):
-		c.giro_lateral = clampf(c.giro_lateral + dgiro, -15.0, 15.0)
-		c.elevacion = clampf(c.elevacion + delev, -3.0, 12.0)
+		# Los topes son de la PIEZA, no de aquí: es su afuste el que los pone, y escritos en dos
+		# sitios uno de los dos se queda atrás.
+		c.giro_lateral = clampf(c.giro_lateral + dgiro, -Canon.ESPEQUE_MAX, Canon.ESPEQUE_MAX)
+		c.elevacion = clampf(c.elevacion + delev, Canon.ELEVACION_MIN, Canon.ELEVACION_MAX)
 
 
 ## Puntería de la batería apuntada, para el HUD: grados de espeque y de cuña, y el alcance que

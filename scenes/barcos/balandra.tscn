@@ -35,29 +35,63 @@ pico_hueso = "driza_pico"
 pico_recorrido = 5.494
 pico_giro = 19.7
 pico_eje = Vector3(0, 0, 1)
+; El collar de la garganta corre por el mastil: baja lo MISMO que el pico pero sin tumbarse.
+collar_hueso = "collar_pico"
 izado_suavizado = 1.5
 ; Trimado LENTO a proposito: a 1.8 el pano se estiraba un 9,95 % de media; a 0.4, un 1,87 %.
 trimado_hueso = "vela"
-trimado_angulo_max = 45.0
+trimado_angulo_max = 80.0
 trimado_eje = Vector3(0, 1, 0)
 trimado_invertir = true
 trimado_suavizado = 0.4
+; La percha topa en el obenque de popa, que en esta balandra esta a 68,5 grados del eje del
+; mastil: el tope efectivo sale MEDIDO de la jarcia, no escrito aqui. El margen no es un numero
+; redondo -- es lo que la barriga de la lona se sale del plano de la percha, 6,4-6,9 grados
+; medidos con tools/vela_en_obenques.tscn, mas dos de holgura. Sin el, la percha topaba a 66 y
+; los obenques seguian apareciendo clavados en medio del pano (475 puntos de 613).
+trimado_margen_jarcia = 9.5
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_bal"]
 size = Vector3(3.81, 2.86, 12)
 
 [node name="Balandra" instance=ExtResource("1")]
 script = ExtResource("8")
-velocidad_max = 9.0
-aceleracion = 2.0
+; 4,5 m/s (8,7 nudos). La VELOCIDAD DE CASCO de esta balandra —1,34·raiz(eslora en pies), la
+; barrera que un casco de desplazamiento no pasa sin planear— son 4,03 m/s con sus 10,41 m de
+; eslora en la flotacion. Estaba en 9, o sea 2,2 veces esa barrera, y con esa arrancada el casco
+; saltaba las olas por pura inercia: lo noto el usuario antes de que lo midieramos.
+velocidad_max = 4.5
+; 0,29 m/s2: la resistencia del agua cerca de la velocidad de casco partida por la masa. Unas
+; 12,8 t (Cb 0,45 sobre 10,4 x 3,8 x 0,7 m), 30 m2 mojados (Denny-Mumford, 2,6 raiz(V L)) y un
+; coeficiente total de 0,012 dan 3,7 kN a 4,5 m/s. Era 2,0, siete veces lo que el peso permite: con
+; la resistencia cuadratica perdia la arrancada en 10 m, menos que su eslora, y aproado se paraba
+; en seco. Ahora la longitud de frenada es 70 m y una virada por avante sale con arrancada.
+aceleracion = 0.29
 velocidad_giro = 0.45
 empuje_delantera = 0.35
 empuje_trasera = 0.65
 angulo_muerto = 40.0
 angulo_optimo = 95.0
 nombre = "Balandra"
-altura_flotacion = -1.35
+; Cala 0,70 m: con los 0,47 que tenia, bastaba con que la flotacion se separase medio metro del
+; agua para que asomara la obra viva entera, que es lo que se veia con mar normal. Medido con
+; tools/entre_dos_olas.tscn: el fondo asomaba 0,028 m con la mar de siempre y con 0,70 no asoma
+; nada. En temporal si asoma (2,13 m), y eso es lo que hace un barco de verdad.
+;
+; La lamina esta en -0,882, asi que el origen (la quilla) va 0,70 por debajo. Le quedan 0,94 m de
+; francobordo hasta la cubierta y 2,16 hasta la regala.
+altura_flotacion = -1.582
+calado = 0.7
 recorte_radio = Vector2(1.9, 6)
+; TAPA DE SENTINA APAGADA: la sustituye otra vez el recorte del agua, ahora en ejes del barco.
+; La tapa era geometria solida flotando dentro del casco y se veia por las cuatro escotillas el
+; 100 % del tiempo, ocupando el 83-94 % del hueco (tools/por_la_rejilla.tscn); el mecanismo sigue
+; en Barco por si algun casco lo necesita.
+tapa_sentina = false
+; La bodega y sus escotillas, que es lo unico por donde se ve el agua. Medido de las fotos de
+; tools/agua_dentro.tscn: de crujia hacia popa, sin llegar al castillo ni a la toldilla. Las
+; cuatro escotillas caen dentro (z de -2,07 a 1,92).
+zona_interior = Vector2(-3.2, 4.4)
 
 [node name="CollisionShape3D" parent="." index="0"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.428, 0)
@@ -143,7 +177,16 @@ precision = 20
 empuje_viento = 40.0
 ; Sin colision con las capsulas de palo: el pie/pico/relinga ya estan anclados a los palos,
 ; asi que la capsula solo empujaba el pano y creaba un "angulo" a lo largo de la botavara.
-capa_perchas = 0
+; Y tampoco con la JARCIA (capa 6), que se probo: apoyar la lona en los obenques no sirve de
+; nada porque esta malla tiene 25 cm de arista y el cabo 1,5 cm de radio, asi que los puntos
+; pasan ENTRE las capsulas. Medido con tools/vela_en_obenques.tscn: 476 puntos pasados con
+; colision y 475 sin ella. Lo que si funciona es topar la percha, que es donde va el margen.
+;
+; Lo que SI mira es la capa 7: el MURO que perchas_solidas pone detras de cada obenque, una
+; capsula gruesa corrida a proa hasta quedar a ras del cabo. Topar la percha para el plano de la
+; vela; el muro para su barriga, que a partir de 120 grados de viento dejaba el obenque de popa
+; atravesando 2 caras del pano (tools/vela_en_obenques.tscn).
+capa_perchas = 64
 ; FLAMEO al desventar. En fachada la lona pegaba un chasquido entero cada ~6,4 s —medio ciclo
 ; del bamboleo de direccion del viento, justo donde la percha gira mas rapido— en vez de flamear:
 ; pico 4,0 veces la mediana. No era el trimado ni las capsulas ni el bamboleo del casco; es que
