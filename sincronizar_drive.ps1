@@ -1,8 +1,14 @@
 ﻿<#
     Sincroniza "Marea Negra" con una carpeta de Google Drive para escritorio.
 
-    Sube el proyecto Godot, las fuentes de Blender y la biblioteca de piezas.
-    Deja FUERA todo lo que es respaldo de recuperacion ante fallo (11,2 GB de
+    Sube SOLO lo que git no guarda: los ficheros que .gitignore deja fuera del
+    repositorio (fuentes de Blender, .glb, audio, relieve, memorias...). El
+    codigo, las escenas y las pruebas van a GitHub y no se duplican en Drive
+    (decidido con el usuario el 18-10-2026; antes copiaba el proyecto entero).
+    La lista sale de `git ls-files --others --ignored`, asi que no hay que
+    mantener extensiones a mano.
+
+    De eso deja FUERA todo lo que es respaldo de recuperacion ante fallo (11,2 GB de
     instantaneas de sesion, 6,3 GB de ficheros recuperados de un .blend
     truncado y 1 GB de .blend1 automaticos de Blender), la cache de Godot y la
     carpeta licencias/, que lleva datos personales y no debe viajar a una
@@ -18,9 +24,8 @@
     Drive para escritorio monta en streaming. Si la unidad cambia de letra,
     pasala con -Destino.
 
-    -Espejo (con -Ejecutar) borra en Drive lo que ya no exista en local. Sin
-    el, la copia solo anade y actualiza: mas seguro, pero los ficheros que
-    renombres se acumulan en el destino.
+    La copia solo anade y actualiza: lo que renombres o borres en local se
+    queda en Drive hasta que lo quites alli.
 #>
 [CmdletBinding()]
 param(
@@ -28,9 +33,7 @@ param(
 
     [string] $Origen = 'E:\Godot\Game3D\marea_negra',
 
-    [switch] $Ejecutar,
-
-    [switch] $Espejo
+    [switch] $Ejecutar
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,7 +46,12 @@ $carpetasFuera = @(
     '.godot',       # cache regenerable del editor
     '.import',
     '__pycache__',
-    'licencias'     # datos personales: nunca a una carpeta compartida
+    'licencias',    # datos personales: nunca a una carpeta compartida
+    'capitan', 'capitan_baja_unido',  # EN PAUSA (18-10-2026): el usuario aun no decide si se queda
+                                      # con este modelo; lo que ya hay online del capitan no se toca.
+                                      # Quitar estas dos y 'capitan*.blend' para volver a subirlo.
+    'worktrees'     # .claude\worktrees: copias enteras del proyecto que crean las sesiones de
+                    # Claude (0,87 GB la primera, 18-10-2026). .claude\memoria SI sube: no va a git.
 )
 
 # Ficheros excluidos por patron o por nombre.
@@ -55,6 +63,7 @@ $ficherosFuera = @(
     'balandra_piezas_rec2.blend',         # 1,3 GB, segundo intento del mismo rescate
     '*_pre_marcado*', '*_pre_etiqueta*',  # modelos anteriores a marcar las partes
     '*_respaldo*', '*_viejo*',
+    'capitan*.blend',                     # EN PAUSA, ver arriba
     'desktop.ini', 'Thumbs.db'
 )
 
@@ -72,40 +81,71 @@ if (-not (Test-Path -LiteralPath $Destino)) {
     throw "No existe la carpeta de destino: $Destino. Creala en Drive antes de sincronizar."
 }
 
-$opciones = @(
-    '/E',           # subcarpetas, incluidas las vacias
-    '/FFT',         # marcas de tiempo con 2 s de tolerancia: Drive no da mas
-    '/DST',         # ajusta el horario de verano
-    '/R:2', '/W:5', # 2 reintentos, 5 s de espera
-    '/NP',          # sin porcentaje por fichero
-    '/TEE'
-)
+# Lo que git NO guarda, con rutas sin escapar (acentos incluidos).
+$ignorados = & git -C $Origen -c core.quotepath=false ls-files --others --ignored --exclude-standard
+if ($LASTEXITCODE -ne 0) {
+    throw "git no pudo listar los ficheros ignorados de $Origen"
+}
 
-if ($Espejo) {
-    if (-not $Ejecutar) {
-        Write-Host 'Aviso: -Espejo solo actua con -Ejecutar.' -ForegroundColor Yellow
+function Fuera([string] $ruta) {
+    $partes = $ruta -split '/'
+    foreach ($c in $carpetasFuera) { if ($partes[0..($partes.Count - 2)] -contains $c) { return $true } }
+    $nombre = $partes[-1]
+    foreach ($f in $ficherosFuera) { if ($nombre -like $f) { return $true } }
+    return $false
+}
+
+$lista = $ignorados | Where-Object { $_ -and -not (Fuera $_) }
+
+# Que hay que copiar: lo que no esta en Drive o difiere en tamano o fecha (2 s de tolerancia,
+# la misma que robocopy /FFT).
+$porCopiar = @()
+$bytes = 0
+foreach ($r in $lista) {
+    $o = Join-Path $Origen ($r -replace '/', '\')
+    $d = Join-Path $Destino ($r -replace '/', '\')
+    $fo = Get-Item -LiteralPath $o -ErrorAction SilentlyContinue
+    if ($null -eq $fo) { continue }
+    $fd = Get-Item -LiteralPath $d -ErrorAction SilentlyContinue
+    if ($null -eq $fd -or $fd.Length -ne $fo.Length -or
+        [math]::Abs(($fo.LastWriteTimeUtc - $fd.LastWriteTimeUtc).TotalSeconds) -gt 2) {
+        $porCopiar += $r
+        $bytes += $fo.Length
     }
-    $opciones += '/MIR'
 }
-
-if (-not $Ejecutar) {
-    $opciones += '/L'   # solo lista; no toca el disco
-    Write-Host ''
-    Write-Host 'MODO SIMULACION: no se copia nada. Anade -Ejecutar para copiar.' -ForegroundColor Cyan
-}
-
-$argumentos = @($Origen, $Destino) + $opciones
-$argumentos += $carpetasFuera | ForEach-Object { '/XD'; $_ }
-$argumentos += $ficherosFuera | ForEach-Object { '/XF'; $_ }
 
 Write-Host ''
 Write-Host "Origen:  $Origen"
 Write-Host "Destino: $Destino"
-Write-Host ''
+Write-Host ("Ficheros fuera de git: {0}; por copiar: {1} ({2:N2} GB)" -f $lista.Count, $porCopiar.Count, ($bytes / 1GB))
+$porCopiar | Group-Object { ($_ -split '/')[0..[math]::Min(1, ($_ -split '/').Count - 2)] -join '/' } |
+    Sort-Object Count -Descending | Select-Object -First 12 |
+    ForEach-Object { Write-Host ("  {0,5}  {1}" -f $_.Count, $_.Name) }
 
+if (-not $Ejecutar) {
+    Write-Host ''
+    Write-Host 'MODO SIMULACION: no se copia nada. Anade -Ejecutar para copiar.' -ForegroundColor Cyan
+    exit 0
+}
+
+# Copia por carpeta: robocopy acepta la lista de ficheros de un directorio.
+$opciones = @(
+    '/FFT',         # marcas de tiempo con 2 s de tolerancia: Drive no da mas
+    '/DST',         # ajusta el horario de verano
+    '/R:2', '/W:5', # 2 reintentos, 5 s de espera
+    '/NP',          # sin porcentaje por fichero
+    '/NJH', '/NJS'
+)
 $registro = Join-Path $env:TEMP ('marea_negra_drive_{0:yyyyMMdd_HHmmss}.log' -f (Get-Date))
-& robocopy.exe @argumentos "/LOG+:$registro"
-$codigo = $LASTEXITCODE
+$codigo = 0
+foreach ($g in ($porCopiar | Group-Object { Split-Path ($_ -replace '/', '\') -Parent })) {
+    $sub = $g.Name
+    # @( ) obligatorio: con un solo fichero PowerShell da un texto suelto, no una lista, y robocopy
+    # recibia el nombre mal (error 123, 18-10-2026).
+    $nombres = @($g.Group | ForEach-Object { Split-Path ($_ -replace '/', '\') -Leaf })
+    & robocopy.exe (Join-Path $Origen $sub) (Join-Path $Destino $sub) @nombres @opciones "/LOG+:$registro" | Out-Null
+    $codigo = [math]::Max($codigo, $LASTEXITCODE)
+}
 
 Write-Host ''
 Write-Host "Registro: $registro"
