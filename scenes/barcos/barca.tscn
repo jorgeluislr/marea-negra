@@ -28,6 +28,7 @@ velocidad_giro = 0.5
 empuje_delantera = 0.3
 empuje_trasera = 0.7
 nombre = "Barca"
+tipo = "barca"
 altura_flotacion = 3.6
 recorte_radio = Vector2(1.9, 3.6)
 

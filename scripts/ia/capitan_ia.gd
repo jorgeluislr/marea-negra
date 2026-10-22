@@ -58,6 +58,36 @@ extends Node
 ## que justifican cada decisión están en el comentario de cada método, y el paquete `ia` de la
 ## batería los vigila.
 
+## Cada vez que suelta una andanada, con el residuo del tiro contra el blanco VERDADERO (ver
+## `_residuo_de_tiro`): es lo que la dificultad dispersa, y lo que leen la batería y el duelo.
+signal andanada(residuo: Dictionary)
+
+## Lo que cambia cada nivel de dificultad (acordado con el usuario el 21-10-2026):
+##
+##   · `largo` y `traves` — desviación típica, en METROS sobre el blanco, del error de estima que
+##     se sortea en cada andanada: a lo largo de la línea de tiro lo persigue la cuña y al través
+##     el espeque. En metros y no en grados porque 1° de cuña son ~40 m a distancia de combate: un
+##     error en grados crecería con la distancia hasta no tocar nunca de lejos.
+##   · `reaccion` — por cuánto se multiplica el periodo de decisión: uno torpe tarda más.
+##   · `municion` — si elige munición por la situación o tira siempre la que lleva.
+##
+## Sin error, la puntería deja el tiro a ±0,3 m y el duelo acertaba el 69-88 %. Medido con
+## `tools/duelo.tscn -- 180 <nivel> sin_danos semilla=1` (las dos balandras, ~95 disparos):
+## **fácil 28 %, normal 50 %, difícil 73 %.** El error AL TRAVÉS pesa menos de lo que parece: de
+## costado a costado la eslora enemiga (10 m) queda atravesada a la línea de tiro, y con 3 m de σ
+## al través fácil seguía en el 40 %.
+## Segundos sin soltar la andanada tras los que el capitán rehace su estima. Sin esto, un error
+## que pone el blanco creído fuera del alcance de la cuña lo deja apuntando ahí para siempre:
+## medido en la batería, fácil apuntó 16 s a un punto 25 m más allá de lo que llegaba la pieza y
+## no disparó ni una vez. Un artillero que no consigue la puntería vuelve a estimar la distancia.
+const REHACER_ESTIMA := 6.0
+
+const NIVELES := {
+	"facil": {"largo": 22.0, "traves": 6.0, "reaccion": 2.0, "municion": false},
+	"normal": {"largo": 9.0, "traves": 2.3, "reaccion": 1.3, "municion": true},
+	"dificil": {"largo": 2.5, "traves": 0.5, "reaccion": 1.0, "municion": true},
+}
+
 ## Bando. Es enemigo de todo barco cuyo bando no sea el suyo; los barcos que no declaran bando se
 ## toman como del jugador, que es lo que son hoy.
 @export var bando := "enemigo"
@@ -66,6 +96,11 @@ extends Node
 ## cada cuánto reacciona (uno malo tarda) y cuánto se conforma al disparar (uno malo suelta la
 ## andanada cuando el tiro todavía no cubre al enemigo, y falla).
 @export_range(0.1, 1.0) var pericia := 1.0
+
+## «facil», «normal» o «dificil» (ver `NIVELES`). Vacío = el que diga `Ajustes.dificultad`, que es
+## lo normal: el jugador lo elige en los ajustes y vale para todos los capitanes, también en
+## partida.
+@export var dificultad := ""
 
 ## Cada cuánto DECIDE, en segundos. No cada frame: nadie replantea la táctica 60 veces por
 ## segundo, cuesta, y decidir cada frame es además lo que hace que un capitán tiemble entre dos
@@ -110,6 +145,11 @@ extends Node
 ## Un rumbo que no mueve el barco no es un rumbo: mejor ceñir en condiciones.
 @export_range(0.0, 1.0) var propulsion_minima := 0.35
 
+## Segundos mínimos entre dos cambios de munición. Cambiar de carga es trabajo de la dotación, y
+## sin esta pausa un blanco que entra y sale de un umbral haría bailar la munición — y con ella el
+## alcance, que es lo que decide dónde se coloca el barco.
+@export var pausa_municion := 10.0
+
 enum Maniobra {SIN_BLANCO, BARLOVENTO, CERRAR, ANDANADA}
 
 var _barco: Node3D
@@ -147,10 +187,29 @@ var _avante := 0
 ## Arribando para coger arrancada antes de virar por avante: 0 = no, ±1 = la banda de la virada
 ## que viene después. Ver `_gobernar()`.
 var _arribando := 0
+## Saliendo del ojo del viento DANDO ATRÁS: 0 = no, ±1 = la banda hacia la que tiene que caer la
+## proa (+1 = babor, el signo de `_angulo_con_signo`). Ver `_gobernar()`.
+var _ciando := 0
 ## Radio al que se está peleando, en metros. 0 = todavía no se está a tiro. Se fija al entrar
 ## en la andanada y no se recalcula: ver el porqué en `_decidir()`.
 var _radio_combate := 0.0
 var _aviso_dado := false
+## Alcance máximo por tipo de munición, medido una vez (`alcance_de`).
+var _alcances := {}
+## El error de estima de esta andanada, en metros: x a lo largo de la línea de tiro, y al través.
+## Se sortea al soltar cada una (`sortear_error`).
+var _error := Vector2.ZERO
+var _error_sorteado := false
+## Segundos desde que se sorteó el error. Ver `REHACER_ESTIMA`.
+var _desde_sorteo := 0.0
+var _rng := RandomNumberGenerator.new()
+var _semilla_puesta := false
+## Segundos desde el último cambio de munición. Empieza lleno: la primera elección no espera.
+var _desde_cambio := INF
+## Dónde estaba el blanco respecto a nosotros en la decisión anterior, y a qué velocidad se ALEJA,
+## m/s suavizados. Es lo que dice si huye. Ver `_elegir_municion`.
+var _blanco_previo := Vector3.INF
+var _huida := 0.0
 
 
 ## La llama el propio barco sobre sus hijos que tengan este método (ver `Barco._ready`), que es
@@ -160,6 +219,9 @@ func configurar(barco: Node3D) -> void:
 
 
 func _ready() -> void:
+	if not _semilla_puesta:
+		var ajustes := _ajustes()
+		set_semilla(int(ajustes.get("semilla")) if ajustes != null and "semilla" in ajustes else 0)
 	if _barco == null:
 		_barco = get_parent() as Node3D
 	if _barco == null:
@@ -218,6 +280,10 @@ func _arrancada_para_virar() -> bool:
 
 
 func _physics_process(delta: float) -> void:
+	# Un barco a pique ya no se gobierna ni dispara.
+	if bool(_barco.get("hundido")):
+		_barco.set("orden_timon", 0.0)
+		return
 	# El contador de "sin arrancada" corre en el reloj de la física, que es donde el casco
 	# actualiza su velocidad.
 	if float(_barco.call("factor_viento")) < 0.08 and absf(float(_barco.get("velocidad"))) < 1.0:
@@ -227,11 +293,12 @@ func _physics_process(delta: float) -> void:
 	var maxima: float = float(_barco.get("velocidad_max")) if "velocidad_max" in _barco else 9.0
 	var navegando := maxima * propulsion_minima
 	_iba_lento = absf(float(_barco.get("velocidad"))) < navegando * (0.9 if _iba_lento else 0.5)
+	_desde_cambio += delta
 	_reloj -= delta
 	if _reloj <= 0.0:
 		# Un capitán torpe tarda más en reaccionar: con pericia 0,1 el periodo se multiplica por
-		# diez, o sea 2,5 s entre decisión y decisión.
-		_reloj = periodo / clampf(pericia, 0.1, 1.0)
+		# diez, o sea 2,5 s entre decisión y decisión. La dificultad lo alarga también.
+		_reloj = _intervalo()
 		_decidir()
 	_gobernar()
 	_puntear()
@@ -264,11 +331,12 @@ func _decidir() -> void:
 	# metros no llegaba al liston y el estado alternaba entre "barlovento" y "cerrando" en
 	# decisiones consecutivas — medido, once cambios en 70 s. Suavizado ademas, porque el
 	# cabeceo mete ruido en la distancia.
-	var intervalo := periodo / clampf(pericia, 0.1, 1.0)
+	var intervalo := _intervalo()
 	if is_finite(_distancia_previa):
 		_tasa = lerpf(_tasa, (distancia - _distancia_previa) / maxf(intervalo, 0.01), 0.4)
 	_distancia_previa = distancia
 	var abriendo := _tasa > 0.3
+	_elegir_municion(hacia, intervalo)
 	# El alcance, antes que nada, porque de él sale también hasta dónde vale la pena ganar el
 	# barlovento: hacerlo desde DENTRO de la distancia de tiro es dejar de disparar para
 	# maniobrar. `distancia_barlovento` queda como suelo para un barco sin artillería.
@@ -355,9 +423,89 @@ func _puntear() -> void:
 		_barco.call("apuntar", banda)
 	else:
 		_barco.set("banda_apuntada", banda)
+	_desde_sorteo += get_physics_process_delta_time()
+	if not _error_sorteado or _desde_sorteo > REHACER_ESTIMA:
+		sortear_error()
 	_apuntar_la_bateria(banda)
 	if _tiro_cubre_al_blanco(banda):
-		_barco.call("disparar_banda")
+		# El residuo contra el blanco VERDADERO, antes de soltar: después las piezas ya no están
+		# listas y no hay a quién preguntárselo.
+		var real := _residuo_de_tiro(banda, false)
+		if int(_barco.call("disparar_banda")) > 0:
+			andanada.emit(real)
+			sortear_error()
+
+
+## Qué se mete en el ánima, según la situación. La regla la acordó el usuario el 21-10-2026, y
+## en orden de prioridad:
+##
+##   · **Rematar con rasa.** Con alguna zona del casco del blanco por debajo de 0,35, lo que
+##     falta es abrirle vías de agua, y eso solo lo hace la rasa (`Municion.abre_via`).
+##   · **Metralla a quemarropa**: por debajo de la mitad de SU alcance —que es corto: sale a 0,55
+##     de la velocidad— y con aparejo que romper. No hay tripulación en el juego todavía, así que
+##     hoy lo que hace es despedazar el aparejo antes de abordar (0,135 por disparo).
+##   · **Palanqueta si HUYE** con el aparejo aún entero (más de 0,4) y a tiro de palanqueta. Un
+##     barco que se escapa no se hunde a tiempo: se le desarbola para que no ande.
+##   · **Rasa** en todo lo demás, que es la que más lejos llega y la que hunde.
+##
+## Cada umbral tiene su banda de salida (como `_lento()`), y entre cambio y cambio pasan
+## `pausa_municion` segundos: el alcance sale de la munición cargada, y de él, dónde se coloca el
+## barco, así que una munición que baila es un barco que no sabe adónde ir.
+##
+## «Huye» es la velocidad del BLANCO alejándose por la línea que nos une, y no la tasa de apertura
+## de la distancia (`_tasa`): esa sube también cuando es este barco el que se va al rodear, y le
+## haría desarbolar a un enemigo quieto.
+func _elegir_municion(hacia: Vector3, intervalo: float) -> void:
+	if _blanco == null or not ("municion_actual" in _barco) or not ("pertrechos" in _barco):
+		return
+	if not bool(_del_nivel("municion")):
+		return
+	# Sobre la posición RELATIVA más la velocidad propia, no sobre la absoluta: el origen flotante
+	# (`Origen`) desplaza el mundo entero de golpe, y eso, leído en absoluto, es una huida a cientos
+	# de metros por segundo. Un salto que ningún casco puede dar (15 m/s) se descarta y se empieza
+	# de cero.
+	var rel := _horizontal(_blanco.global_position - _barco.global_position)
+	if _blanco_previo.is_finite():
+		var propia := _horizontal((_barco as CharacterBody3D).velocity) 			if _barco is CharacterBody3D else Vector3.ZERO
+		var v := (rel - _blanco_previo) / maxf(intervalo, 0.01) + propia
+		if v.length() > 15.0:
+			_huida = 0.0
+		else:
+			_huida = lerpf(_huida, v.dot(hacia), 0.4)
+	_blanco_previo = rel
+	if _desde_cambio < pausa_municion:
+		return
+	var quiere := _municion_para(rel.length())
+	if quiere != String(_barco.get("municion_actual")):
+		_barco.set("municion_actual", quiere)
+		_desde_cambio = 0.0
+
+
+func _municion_para(distancia: float) -> String:
+	var actual := String(_barco.get("municion_actual"))
+	var integ: Dictionary = _blanco.get("integridad") if "integridad" in _blanco else {}
+	var casco := 1.0
+	for z in ["proa", "popa", "babor", "estribor"]:
+		casco = minf(casco, float(integ.get(z, 1.0)))
+	var aparejo := float(integ.get("aparejo", 1.0))
+	if casco < 0.35 and _queda("rasa"):
+		return "rasa"
+	var metralla := actual == "metralla"
+	if distancia < alcance_de("metralla") * (0.6 if metralla else 0.5) 			and aparejo > (0.15 if metralla else 0.2) and _queda("metralla"):
+		return "metralla"
+	var palanqueta := actual == "palanqueta"
+	if _huida > (0.2 if palanqueta else 0.5) 			and distancia < alcance_de("palanqueta") * (1.0 if palanqueta else 0.9) 			and aparejo > (0.3 if palanqueta else 0.4) and _queda("palanqueta"):
+		return "palanqueta"
+	if _queda("rasa"):
+		return "rasa"
+	for t in Municion.TIPOS:
+		if _queda(t):
+			return t
+	return actual
+
+
+func _queda(tipo: String) -> bool:
+	return int((_barco.get("pertrechos") as Dictionary).get(tipo, 0)) > 0
 
 
 ## El puesto de tiro que mas conviene: un punto a distancia de tiro del enemigo, elegido por
@@ -453,7 +601,7 @@ func _apuntar_la_bateria(banda: String) -> void:
 	if _blanco is CharacterBody3D:
 		vel = (_blanco as CharacterBody3D).velocity
 	var vuelo := Bala.tiempo_hasta(boca, c.call("velocidad_salida"), float(c.get("altura_mar")))
-	var futuro: Vector3 = _blanco.global_position + vel * maxf(vuelo, 0.0)
+	var futuro: Vector3 = _estimado(boca, _blanco.global_position + vel * maxf(vuelo, 0.0))
 	var al_blanco := _horizontal(futuro - boca)
 	var falta := al_blanco.length()
 	if falta < 1.0:
@@ -522,6 +670,9 @@ func _elegir_blanco() -> Node3D:
 			continue
 		if _bando_de(n) == bando:
 			continue
+		# Uno que se va a pique ya no es enemigo: tirarle es gastar pólvora.
+		if bool(n.get("hundido")):
+			continue
 		var n3 := n as Node3D
 		if n3 == null:
 			continue
@@ -533,7 +684,8 @@ func _elegir_blanco() -> Node3D:
 	# salvo que otro este MUCHO mas cerca (un 30 %), porque en cuanto dos enemigos quedan a
 	# distancia parecida el capitan se pondria a alternar entre los dos y no atacaria a ninguno
 	# —el mismo problema que la bordada, y se cura igual: con memoria.
-	if _blanco != null and is_instance_valid(_blanco) and _blanco != mejor:
+	if _blanco != null and is_instance_valid(_blanco) and _blanco != mejor \
+			and not bool(_blanco.get("hundido")):
 		var d_actual: float = _barco.global_position.distance_to(_blanco.global_position)
 		if mejor == null or mejor_d > d_actual * 0.7:
 			return _blanco
@@ -620,12 +772,48 @@ func _gobernar() -> void:
 			_avante = 0
 		if _arribando != 0 and (not cruza or signf(error_rumbo) != float(_arribando)):
 			_arribando = 0
-		if _en_irons():
-			# Alejar la proa del viento: si el viento está por babor, timón a estribor.
-			orden = -signf(al_viento) if absf(al_viento) > 0.01 else float(_bordada)
+		if _en_irons() and _ciando == 0:
+			# **El lado se elige UNA vez**, al quedar atrapado: hacia el rumbo que se quiere, que
+			# desde el ojo nunca cruza la zona muerta. Si eso es ambiguo —el rumbo pedido cae justo
+			# por la popa—, la bordada; y si tampoco hay, alejarse del viento por donde ya cae la
+			# proa. Antes salía del signo de `al_viento`, que aproado exacto vale 0, y de una
+			# bordada que valía 0: caña al medio 24 s (`tools/capitan_en_el_ojo.tscn`).
+			var lado := signf(error_rumbo)
+			if absf(error_rumbo) < 0.01 or absf(error_rumbo) > PI - deg_to_rad(5.0):
+				lado = float(_bordada) if _bordada != 0 					else (-signf(al_viento) if absf(al_viento) > 0.01 else 1.0)
+			_ciando = int(lado)
 			_redondo = 0
 			_avante = 0
 			_arribando = 0
+		if _ciando != 0:
+			# **Ciando la caña obra al revés, y aquí sí se tiene en cuenta.** Atrapado en el ojo, el
+			# casco cía (`Barco.cia_en_el_ojo`) y el agua llega a la pala por la otra cara: la orden
+			# que abatiría avante mete la proa en el viento. Medido antes del arreglo: desde 4° la
+			# proa volvía al ojo en 9 s y oscilaba ahí ±0,6°, **60 s de 60 en la zona muerta, 58
+			# ciando**. Se invierte la MISMA ley proporcional, no una orden suelta a tope, para que
+			# la proa no se pase del rumbo al caer.
+			#
+			# Y solo aquí, con memoria, no cada vez que la velocidad salga negativa: invertir la caña
+			# en general —con la ley pensada para ir avante— fue lo que dejó al capitán de 18
+			# disparos en 45 s a 2. Se suelta al recobrar arrancada AVANTE; entre medias, con el
+			# barco casi parado, la pala apenas muerde y da igual qué ley mande.
+			#
+			# Adonde se cae no es el rumbo pedido sino el de MÁXIMA propulsión (`angulo_optimo`) por
+			# esa banda, como en `_arribando`: con el blanco a barlovento el rumbo pedido es la
+			# ceñida, que da 0,35 de empuje, y el barco seguía ciando 60 s después de salir del ojo.
+			# Con arrancada ya manda la ley de siempre, y lo lleva a donde quiera.
+			var v := float(_barco.get("velocidad"))
+			if v > 0.3:
+				_ciando = 0
+			else:
+				var optimo := deg_to_rad(float(_barco.get("angulo_optimo"))) 					if "angulo_optimo" in _barco else PI * 0.5
+				var e := _angulo_con_signo(_proa(), origen.rotated(Vector3.UP, float(_ciando) * optimo))
+				# Si la proa se ha ido al otro lado del objetivo más de un cuarto de vuelta, el error
+				# cambia de signo sin que haya que volver: se sigue por la banda elegida.
+				if signf(e) != float(_ciando) and absf(e) > PI * 0.5:
+					e += float(_ciando) * TAU
+				var o := clampf(e / deg_to_rad(zona_timon), -1.0, 1.0)
+				orden = -o if v < 0.0 else o
 		elif _avante != 0:
 			# **La virada por avante que se empieza con arrancada se TERMINA.** Cruzar el ojo cuesta
 			# arrancada siempre —por eso se empieza con ella—, y con la inercia de guiñada el casco
@@ -874,6 +1062,26 @@ func _alcance_real() -> float:
 	return (suma / float(n)) * fraccion_de_alcance
 
 
+## El alcance máximo de una munición en estas piezas, en metros: el de la cuña a tope, igual que
+## `_alcance_real()` pero con la carga que se le pida. Se le pregunta a la pieza poniéndole esa
+## munición y devolviéndole la suya, así que la palanqueta, que sale más despacio, llega a la
+## mitad sin que nadie lo escriba aquí. Se guarda: el afuste no cambia en una pelea.
+func alcance_de(tipo: String) -> float:
+	if _alcances.has(tipo):
+		return _alcances[tipo]
+	var piezas := _canones("estribor") + _canones("babor")
+	if piezas.is_empty():
+		return distancia_combate
+	var suma := 0.0
+	for c in piezas:
+		var antes: Municion = c.get("municion")
+		c.set("municion", Municion.de(tipo))
+		suma += float(c.call("alcance_a", Canon.ELEVACION_MAX))
+		c.set("municion", antes)
+	_alcances[tipo] = suma / float(piezas.size())
+	return _alcances[tipo]
+
+
 func _canones(banda: String) -> Array:
 	if not _barco.has_method("canones_de"):
 		return []
@@ -892,7 +1100,7 @@ func _canones(banda: String) -> Array:
 ## recorta el agua, 1,9 × 6 m en la balandra), en el espacio del enemigo. Un radio único diría
 ## que un tiro 5 m a la banda es un tocado, y por la banda el casco sólo mide 1,9.
 func _tiro_cubre_al_blanco(banda: String) -> bool:
-	return bool(_residuo_de_tiro(banda)["cubre"])
+	return bool(_residuo_de_tiro(banda, true)["cubre"])
 
 
 ## Dónde cae el tiro de la banda respecto al blanco, en metros, y si lo cubre. Es lo que decide
@@ -906,7 +1114,10 @@ func _tiro_cubre_al_blanco(banda: String) -> bool:
 ##   · `listas` — piezas cargadas de esa banda. Con 0, los otros números no dicen nada.
 ##
 ## Se queda con la pieza cuyo tiro pasa más cerca, que es la que decide el fuego.
-func _residuo_de_tiro(banda: String) -> Dictionary:
+##
+## `con_error`: contra donde el capitán CREE que está el blanco (con su error de estima, que es lo
+## que decide el fuego) o contra donde está de verdad (lo que miden las herramientas).
+func _residuo_de_tiro(banda: String, con_error: bool) -> Dictionary:
 	var sale := {"largo": INF, "traves": INF, "cubre": false, "listas": 0}
 	if _blanco == null or not is_instance_valid(_blanco):
 		return sale
@@ -931,6 +1142,8 @@ func _residuo_de_tiro(banda: String) -> Dictionary:
 			continue
 		var caida: Vector3 = c.call("punto_de_caida")
 		var futuro := _blanco.global_position + vel_blanco * vuelo
+		if con_error:
+			futuro = _estimado(boca, futuro)
 		# ── ¿Cubre? ───────────────────────────────────────────────────────────
 		# No es que la bala CAIGA dentro de la elipse del casco: eso trata al enemigo como una
 		# mancha plana sobre el agua, y un barco tiene ALTO. Una bala cuyo punto de caída quede
@@ -962,9 +1175,7 @@ func _residuo_de_tiro(banda: String) -> Dictionary:
 			# En los ejes del ENEMIGO, para que la elipse esté orientada con su casco: X es la
 			# manga y Z la eslora.
 			var p: Vector3 = _blanco.global_transform.basis.inverse() * (al_llegar - futuro)
-			if (p.x * p.x) / (semiejes.x * semiejes.x) \
-					+ (p.z * p.z) / (semiejes.y * semiejes.y) <= 1.0 \
-					and al_llegar.y >= agua and al_llegar.y <= techo:
+			if _en_planta(p, semiejes) and al_llegar.y >= agua and al_llegar.y <= techo:
 				sale["cubre"] = true
 		# Y el error repartido en las DOS correcciones que el artillero tiene en la mano, que no
 		# son los ejes del enemigo: a lo largo de la línea de tiro lo arregla la cuña, y al
@@ -985,8 +1196,39 @@ func _residuo_de_tiro(banda: String) -> Dictionary:
 
 ## El tiro de la banda que va a disparar, para las herramientas de medida y las pruebas. Ver
 ## `_residuo_de_tiro`.
+## Si un punto en ejes del blanco cae dentro de su casco visto desde arriba.
+##
+## **Con la planta MEDIDA del casco, no con la elipse de `recorte_radio`**, desde que la bala choca
+## con la madera de verdad (las dianas, 19-10-2026) y no con la caja del barco. La elipse tiene los
+## semiejes de la caja (1,9 × 6 m) y la flotación de esta balandra solo mide 10,4 m con la proa y la
+## popa en punta: el capitán daba por bueno un tiro que pasaba por el aire de las esquinas. Medido en
+## `tools/duelo.tscn` (180 s): con la caja tocaba el 81 %; con las dianas, el 62-65 % con la elipse o
+## con la planta. No es que apunte peor —la ventana de `tools/porque_no_dispara.tscn` da los mismos
+## residuos—: los tiros que faltan pasan rozando el costado a 1,7-2,1 m de crujía, dentro de la
+## caja (1,9) y fuera de la madera (1,65 en la flotación). Exigir un margen dentro de la planta
+## (75 %) dio 67 %, dentro del ruido, y no se dejó.
+##
+## La pericia ensancha la planta igual que ensanchaba la elipse: un capitán torpe dispara antes.
+func _en_planta(p: Vector3, semiejes: Vector2) -> bool:
+	var s: Dictionary = _blanco.call("silueta_de_flotacion") \
+		if _blanco.has_method("silueta_de_flotacion") else {}
+	if s.is_empty():
+		return (p.x * p.x) / (semiejes.x * semiejes.x) + (p.z * p.z) / (semiejes.y * semiejes.y) <= 1.0
+	var ancho: PackedFloat32Array = s["ancho"]
+	var lo := float(s["lo"])
+	var hi := float(s["hi"])
+	var holgura := 1.0 / clampf(pericia, 0.1, 1.0)
+	var medio := (lo + hi) * 0.5
+	var z := medio + (p.z - medio) / holgura
+	if z < lo or z > hi or ancho.size() < 2:
+		return false
+	var k := (z - lo) / (hi - lo) * float(ancho.size() - 1)
+	var i := mini(int(k), ancho.size() - 2)
+	return absf(p.x) <= lerpf(ancho[i], ancho[i + 1], k - float(i)) * holgura
+
+
 func residuo_de_tiro() -> Dictionary:
-	return _residuo_de_tiro(_banda_que_bate())
+	return _residuo_de_tiro(_banda_que_bate(), false)
 
 
 # ── Órdenes sueltas ──────────────────────────────────────────────────────────
@@ -995,6 +1237,61 @@ func _fondear(v: bool) -> void:
 		_barco.call("set_ancla", v)
 	elif _barco.has_method("_set_ancla"):
 		_barco.call("_set_ancla", v)
+
+
+# ── Dificultad ───────────────────────────────────────────────────────────────
+## El nivel con que pelea: el suyo si se le fijó, si no el de los ajustes, y «normal» si no hay
+## ajustes (una herramienta suelta).
+func nivel() -> String:
+	if NIVELES.has(dificultad):
+		return dificultad
+	var ajustes := _ajustes()
+	if ajustes != null and "dificultad" in ajustes and NIVELES.has(String(ajustes.get("dificultad"))):
+		return String(ajustes.get("dificultad"))
+	return "normal"
+
+
+## Fija la semilla del error de puntería. 0 = una cualquiera.
+func set_semilla(s: int) -> void:
+	_semilla_puesta = true
+	if s == 0:
+		_rng.randomize()
+	else:
+		_rng.seed = s
+	_error_sorteado = false
+
+
+## Sortea el error de estima de la próxima andanada y lo devuelve (metros: largo, través).
+func sortear_error() -> Vector2:
+	_error = Vector2(_rng.randfn(0.0, float(_del_nivel("largo"))),
+		_rng.randfn(0.0, float(_del_nivel("traves"))))
+	_error_sorteado = true
+	_desde_sorteo = 0.0
+	return _error
+
+
+## Donde el capitán CREE que estará el blanco: el punto verdadero movido por su error de estima, a
+## lo largo y al través de la línea de tiro desde la boca.
+func _estimado(boca: Vector3, futuro: Vector3) -> Vector3:
+	var linea := _horizontal(futuro - boca)
+	if linea.length() < 0.01:
+		return futuro
+	linea = linea.normalized()
+	return futuro + linea * _error.x + linea.rotated(Vector3.UP, PI * 0.5) * _error.y
+
+
+func _del_nivel(clave: String) -> Variant:
+	return (NIVELES[nivel()] as Dictionary)[clave]
+
+
+## Segundos entre decisión y decisión: el periodo, alargado por la torpeza y por la dificultad.
+func _intervalo() -> float:
+	return periodo * float(_del_nivel("reaccion")) / clampf(pericia, 0.1, 1.0)
+
+
+func _ajustes() -> Node:
+	var arbol := Engine.get_main_loop() as SceneTree
+	return arbol.root.get_node_or_null(^"Ajustes") if arbol != null else null
 
 
 # ── Utilidades ───────────────────────────────────────────────────────────────

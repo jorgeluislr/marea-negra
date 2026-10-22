@@ -28,6 +28,7 @@ velocidad_giro = 0.4
 empuje_delantera = 0.3
 empuje_trasera = 0.7
 nombre = "Goleta"
+tipo = "goleta"
 altura_flotacion = 4.97
 recorte_radio = Vector2(2.454, 5)
 

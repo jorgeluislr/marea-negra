@@ -26,6 +26,7 @@ aceleracion = 2.0
 empuje_delantera = 0.3
 empuje_trasera = 0.7
 nombre = "Lancha"
+tipo = "lancha"
 recorte_radio = Vector2(0.8, 2)
 
 [node name="CollisionShape3D" parent="." index="0"]

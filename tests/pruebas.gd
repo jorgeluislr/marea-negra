@@ -45,6 +45,16 @@ func _correr() -> void:
 		await MundoTest.correr(m, arbol)
 	if m.quiere_paquete("mapa", false):
 		await MapaTest.correr(m, arbol)
+	if m.quiere_paquete("clima"):
+		await ClimaTest.correr(m, arbol)
+	if m.quiere_paquete("hud"):
+		await HudTest.correr(m, arbol)
+	if m.quiere_paquete("travesia"):
+		await TravesiaTest.correr(m, arbol)
+	if m.quiere_paquete("municion"):
+		await MunicionTest.correr(m, arbol)
+	if m.quiere_paquete("menu"):
+		await MenuTest.correr(m, arbol)
 	# El último: monta su propio mundo a 50 km y suelta el de la batería.
 	if m.quiere_paquete("origen", false):
 		await OrigenTest.correr(m, arbol)

@@ -265,7 +265,12 @@ static func _baterias(m: MarcoPruebas, arbol: SceneTree, b: Node) -> void:
 static func _fuego(m: MarcoPruebas, arbol: SceneTree, b: Node, canones: Array[Node]) -> void:
 	b.set("banda_apuntada", "estribor")
 	var pieza := canones_de(canones, "estribor")[0] as Node3D
-	var previsto: Vector3 = pieza.call("punto_de_caida")
+	# Lo previsto es donde ACABA LA GUÍA (`trayectoria`), que es lo que ve el jugador. Desde que la
+	# bala cae en la ola y no en el plano (19-10-2026), `punto_de_caida` —el plano, que es lo que usa
+	# el capitán para afinar— se separaba 2,06 m de la caída real con un tiro rasante.
+	var guia: PackedVector3Array = pieza.call("trayectoria")
+	var previsto: Vector3 = guia[guia.size() - 1] if not guia.is_empty() \
+		else pieza.call("punto_de_caida")
 	m.mayor_que(previsto.distance_to(pieza.global_position), 10.0,
 		"el tiro previsto cae lejos del barco")
 

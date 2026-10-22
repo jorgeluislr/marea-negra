@@ -1,0 +1,369 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/hud.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/ui/silueta_danos.gd" id="2"]
+[ext_resource type="Script" path="res://scripts/ui/cartela_barco.gd" id="3"]
+[ext_resource type="Script" path="res://scripts/ui/rosa_vientos.gd" id="4"]
+[ext_resource type="Script" path="res://scripts/ui/aguja_rosa.gd" id="5"]
+[ext_resource type="Script" path="res://scripts/ui/estado_barco.gd" id="6"]
+[ext_resource type="Script" path="res://scripts/ui/icono_estado.gd" id="7"]
+[ext_resource type="Script" path="res://scripts/ui/panel_bateria.gd" id="8"]
+[ext_resource type="Script" path="res://scripts/ui/corredera.gd" id="9"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/icono_foque.png" id="10"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/icono_mayor.png" id="11"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/icono_ancla.png" id="12"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/icono_timon.png" id="13"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/icono_cubierta.png" id="14"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/icono_batalla.png" id="15"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/icono_municion.png" id="16"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/icono_canon.png" id="17"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/icono_dano.png" id="18"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/marco_laton.png" id="19"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/rosa_esfera.png" id="20"]
+[ext_resource type="Texture2D" path="res://assets/textures/ui/cartela_hud.png" id="21"]
+
+[sub_resource type="SystemFont" id="Letra"]
+font_names = PackedStringArray("Georgia", "Book Antiqua", "Times New Roman", "serif")
+
+[sub_resource type="SystemFont" id="LetraCursiva"]
+font_names = PackedStringArray("Georgia", "Book Antiqua", "Times New Roman", "serif")
+font_italic = true
+
+[node name="HUD" type="CanvasLayer"]
+script = ExtResource("1")
+
+[node name="Danos" type="Control" parent="."]
+offset_left = 56.0
+offset_top = 16.0
+offset_right = 276.0
+offset_bottom = 96.0
+mouse_filter = 2
+script = ExtResource("2")
+texture_filter = 4
+
+
+[node name="Cartela" type="Control" parent="."]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 6.0
+offset_right = 150.0
+offset_bottom = 92.0
+grow_horizontal = 2
+mouse_filter = 2
+script = ExtResource("3")
+texture_filter = 4
+fondo = ExtResource("21")
+
+[node name="Linea" type="HBoxContainer" parent="Cartela"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 40.0
+offset_right = -40.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="Nombre" type="Label" parent="Cartela/Linea"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_colors/font_color = Color(0.231, 0.141, 0.071, 1)
+theme_override_fonts/font = SubResource("Letra")
+theme_override_font_sizes/font_size = 24
+vertical_alignment = 1
+
+[node name="Tipo" type="Label" parent="Cartela/Linea"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_colors/font_color = Color(0.42, 0.29, 0.149, 1)
+theme_override_fonts/font = SubResource("LetraCursiva")
+theme_override_font_sizes/font_size = 16
+vertical_alignment = 1
+
+[node name="Corredera" type="Control" parent="."]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = 156.0
+offset_top = 6.0
+offset_right = 242.0
+offset_bottom = 92.0
+grow_horizontal = 2
+mouse_filter = 2
+script = ExtResource("9")
+texture_filter = 4
+fondo = ExtResource("19")
+
+[node name="Nudos" type="Label" parent="Corredera"]
+layout_mode = 0
+offset_top = 18.0
+offset_right = 86.0
+offset_bottom = 52.0
+theme_override_colors/font_color = Color(0.231, 0.141, 0.071, 1)
+theme_override_fonts/font = SubResource("Letra")
+theme_override_font_sizes/font_size = 24
+horizontal_alignment = 1
+
+[node name="Unidad" type="Label" parent="Corredera"]
+layout_mode = 0
+offset_top = 48.0
+offset_right = 86.0
+offset_bottom = 66.0
+theme_override_colors/font_color = Color(0.42, 0.29, 0.149, 1)
+theme_override_fonts/font = SubResource("LetraCursiva")
+theme_override_font_sizes/font_size = 12
+text = "nudos"
+horizontal_alignment = 1
+
+[node name="Rosa" type="Control" parent="."]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = -214.0
+offset_right = 194.0
+offset_bottom = -44.0
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("4")
+texture_filter = 4
+esfera = ExtResource("20")
+
+[node name="AgujaViento" type="Control" parent="Rosa"]
+layout_mode = 0
+offset_right = 170.0
+offset_bottom = 170.0
+mouse_filter = 2
+script = ExtResource("5")
+forma = 1
+color = Color(0.173, 0.373, 0.525, 1)
+
+[node name="AgujaRumbo" type="Control" parent="Rosa"]
+layout_mode = 0
+offset_right = 170.0
+offset_bottom = 170.0
+mouse_filter = 2
+script = ExtResource("5")
+
+[node name="Lectura" type="Label" parent="Rosa"]
+layout_mode = 0
+offset_left = -20.0
+offset_top = 174.0
+offset_right = 190.0
+offset_bottom = 196.0
+theme_override_colors/font_color = Color(0.914, 0.851, 0.69, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_constants/outline_size = 5
+theme_override_fonts/font = SubResource("Letra")
+theme_override_font_sizes/font_size = 14
+horizontal_alignment = 1
+
+[node name="Ayuda" type="Label" parent="."]
+visible = false
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -300.0
+offset_top = -122.0
+offset_right = 300.0
+offset_bottom = -98.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.914, 0.851, 0.69, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_constants/outline_size = 5
+theme_override_fonts/font = SubResource("Letra")
+theme_override_font_sizes/font_size = 15
+text = "[WASD] andar   [MAYÚS] correr   [ESPACIO] saltar   [E] interactuar"
+horizontal_alignment = 1
+
+[node name="AvisoTravesia" type="Label" parent="."]
+visible = false
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -300.0
+offset_top = -150.0
+offset_right = 300.0
+offset_bottom = -126.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.914, 0.851, 0.69, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_constants/outline_size = 5
+theme_override_fonts/font = SubResource("Letra")
+theme_override_font_sizes/font_size = 15
+text = "Travesía"
+horizontal_alignment = 1
+
+[node name="Estado" type="HBoxContainer" parent="."]
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -204.0
+offset_top = -94.0
+offset_right = 204.0
+offset_bottom = -16.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_constants/separation = 8
+alignment = 1
+script = ExtResource("6")
+texture_filter = 4
+
+[node name="VelaProa" type="Control" parent="Estado"]
+custom_minimum_size = Vector2(66, 84)
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("7")
+icono = ExtResource("10")
+marco = ExtResource("19")
+
+[node name="VelaPopa" type="Control" parent="Estado"]
+custom_minimum_size = Vector2(66, 84)
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("7")
+icono = ExtResource("11")
+marco = ExtResource("19")
+
+[node name="Ancla" type="Control" parent="Estado"]
+custom_minimum_size = Vector2(66, 84)
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("7")
+color_activo = Color(0.659, 0.482, 0.196, 1)
+icono = ExtResource("12")
+marco = ExtResource("19")
+
+[node name="Timon" type="Control" parent="Estado"]
+custom_minimum_size = Vector2(66, 84)
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("7")
+color_activo = Color(0.659, 0.482, 0.196, 1)
+color_inactivo = Color(0.659, 0.482, 0.196, 1)
+icono = ExtResource("13")
+marco = ExtResource("19")
+icono_inactivo = ExtResource("14")
+
+[node name="Batalla" type="Control" parent="Estado"]
+custom_minimum_size = Vector2(66, 84)
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("7")
+color_activo = Color(0.72, 0.13, 0.09, 1)
+icono = ExtResource("15")
+marco = ExtResource("19")
+
+[node name="Travesia" type="Control" parent="Estado"]
+custom_minimum_size = Vector2(66, 84)
+layout_mode = 2
+mouse_filter = 2
+script = ExtResource("7")
+marco = ExtResource("19")
+color_activo = Color(0.2, 0.42, 0.62, 1)
+
+[node name="Bateria" type="Control" parent="."]
+visible = false
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -200.0
+offset_top = -400.0
+offset_right = -24.0
+offset_bottom = -24.0
+grow_horizontal = 0
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("8")
+texture_filter = 4
+icono_canon = ExtResource("17")
+
+[node name="Municion" type="Label" parent="Bateria"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -60.0
+offset_top = -34.0
+offset_right = 4.0
+offset_bottom = 0.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.914, 0.851, 0.69, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_constants/outline_size = 5
+theme_override_fonts/font = SubResource("Letra")
+theme_override_font_sizes/font_size = 22
+horizontal_alignment = 2
+
+[node name="Balas" type="Label" parent="Bateria"]
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = -30.0
+offset_right = 80.0
+offset_bottom = 0.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.914, 0.851, 0.69, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.75)
+theme_override_constants/outline_size = 5
+theme_override_fonts/font = SubResource("LetraCursiva")
+theme_override_font_sizes/font_size = 15
+text = "balas"
+
+[node name="IconoDanos" type="Control" parent="."]
+texture_filter = 4
+offset_left = 8.0
+offset_top = 24.0
+offset_right = 56.0
+offset_bottom = 88.0
+mouse_filter = 2
+script = ExtResource("7")
+icono = ExtResource("18")
+marco = ExtResource("19")
+color_activo = Color(0.659, 0.482, 0.196, 1)
+activo = true
+
+[node name="IconoMunicion" type="Control" parent="Bateria"]
+texture_filter = 4
+layout_mode = 1
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -86.0
+offset_top = -46.0
+offset_right = -40.0
+offset_bottom = 10.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("7")
+icono = ExtResource("16")
+marco = ExtResource("19")
+color_activo = Color(0.659, 0.482, 0.196, 1)
+activo = true

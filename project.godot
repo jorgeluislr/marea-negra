@@ -11,8 +11,10 @@ config_version=5
 [application]
 
 config/name="Marea Negra"
-run/main_scene="res://scenes/world/main_world.tscn"
+run/main_scene="res://scenes/ui/menu_principal.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
+boot_splash/bg_color=Color(0.04, 0.08, 0.11, 1)
+boot_splash/image="res://assets/textures/ui/carga/atardecer.png"
 
 [autoload]
 
@@ -21,6 +23,8 @@ Ajustes="*res://scripts/mundo/ajustes.gd"
 Oleaje="*res://scripts/mundo/oleaje.gd"
 Horizonte="*res://scripts/mundo/horizonte.gd"
 Origen="*res://scripts/mundo/origen.gd"
+Calendario="*res://scripts/mundo/calendario.gd"
+Partida="*res://scripts/ui/partida.gd"
 
 [display]
 

@@ -20,6 +20,17 @@ extends Node
 const SEPARACION := 300.0   ## Metros entre las dos al empezar: lejos, para que haya que navegar.
 const ESPERA := 4.0         ## Que carguen el modelo y monten la artillería (es diferida).
 const DURACION := 60.0
+## La duración se puede alargar por línea de órdenes (`-- 180`): desde el casco con masa
+## (15-10-2026) un barco que nace aproado tarda en salir del ojo del viento, y en 60 s puede no
+## tirar ni una vez, con lo que el porcentaje de tocados no mide nada.
+var _duracion := DURACION
+## Dificultad de los dos capitanes (`-- facil`, `normal` o `dificil`; vacío = la de `Ajustes`),
+## semilla de su puntería (`-- semilla=7`; cada barco usa la suya a partir de esa) y `sin_danos`,
+## que repara al blanco en cada tocado: para medir PUNTERÍA hace falta que la pelea dure, y con
+## daños los dos se hunden a los ~110 s.
+var _nivel := ""
+var _semilla := 1
+var _sin_danos := false
 const INFORME := 5.0        ## Cada cuánto se imprime una línea.
 ## Altura de la lámina de agua, la del `Water` de `main_world.tscn`.
 ##
@@ -35,9 +46,21 @@ var _capitanes: Array[Node] = []
 var _tiros := {}
 var _tocados := {}
 var _primer_fuego := {}
+## Dónde acaba cada tiro, en ejes del BLANCO (x manga, y alto desde la quilla, z eslora): lo que
+## separa «cae corto» de «pasa por encima» o «por la punta», que el porcentaje solo no dice.
+var _caidas: Array[String] = []
 
 
 func _ready() -> void:
+	for a in OS.get_cmdline_user_args():
+		if a.is_valid_float():
+			_duracion = float(a)
+		elif a in CapitanIA.NIVELES:
+			_nivel = a
+		elif a.begins_with("semilla="):
+			_semilla = int(a.trim_prefix("semilla="))
+		elif a == "sin_danos":
+			_sin_danos = true
 	var esc := load("res://scenes/barcos/balandra.tscn") as PackedScene
 	for i in 2:
 		var b := esc.instantiate() as Node3D
@@ -49,6 +72,8 @@ func _ready() -> void:
 		var cap := CapitanIA.new()
 		cap.name = "Capitan"
 		cap.bando = "azul" if i == 0 else "rojo"
+		cap.dificultad = _nivel
+		cap.set_semilla(_semilla + i)
 		b.add_child(cap)
 		add_child(b)
 		# De proa la una a la otra, separadas en X, con el viento cruzado.
@@ -66,12 +91,14 @@ func _ready() -> void:
 
 	_ficha_de_la_pieza()
 	print("═══ Duelo: dos capitanes de IA ═══")
-	print("separación inicial %.0f m, viento del +X, %.0f s\n" % [SEPARACION, DURACION])
+	print("separación inicial %.0f m, viento del +X, %.0f s, dificultad %s, semilla %d%s\n" % [
+		SEPARACION, _duracion, _capitanes[0].call("nivel"), _semilla,
+		", sin daños" if _sin_danos else ""])
 	print(" %5s %8s  %-22s %-22s" % ["t", "dist", _barcos[0].name, _barcos[1].name])
 
 	var t := 0.0
 	var siguiente := 0.0
-	while t < DURACION:
+	while t < _duracion:
 		_viento_fijo()
 		if t >= siguiente:
 			siguiente += INFORME
@@ -116,9 +143,19 @@ func _enganchar_canones() -> void:
 			if not (n.has_method("disparar") and n.has_signal("disparo")):
 				continue
 			n.connect("disparo", func(_d: Vector3, _h: Vector3): _tiros[b] += 1)
-			n.connect("impacto", func(_donde: Vector3, contra: Node):
+			n.connect("impacto", func(donde: Vector3, contra: Node):
+				var otro: Node3D = _barcos[1] if b == _barcos[0] else _barcos[0]
+				var local := otro.to_local(donde)
 				if contra != null and _barco_de(contra) != null and _barco_de(contra) != b:
-					_tocados[b] += 1)
+					_tocados[b] += 1
+					if _sin_danos and otro.has_method("reparar"):
+						otro.call("reparar")
+					_caidas.append("%s TOCA %-8s en (%+.1f, %+.1f, %+.1f)" % [b.name,
+						otro.call("zona_de", donde, contra) if otro.has_method("zona_de") else "",
+						local.x, local.y, local.z])
+				elif local.length() < 60.0:
+					_caidas.append("%s falla: cae en (%+.1f, %+.1f, %+.1f) de su blanco, contra %s"
+						% [b.name, local.x, local.y, local.z, contra]))
 
 
 ## De qué barco es un colisionador. La bala choca contra la caja del casco, que puede ser el
@@ -174,3 +211,7 @@ func _resumen() -> void:
 			% [b.name, tiros, tocados, pct, int(_capitanes[i].call("viradas")),
 			"%.0f m" % _primer_fuego[b] if _primer_fuego[b] >= 0.0 else "nunca"])
 	print("  distancia final %.1f m" % _barcos[0].global_position.distance_to(_barcos[1].global_position))
+	print("
+── dónde acaba cada tiro, en ejes del blanco (la flotación va a ~0,7 sobre la quilla) ──")
+	for c in _caidas:
+		print("  " + c)

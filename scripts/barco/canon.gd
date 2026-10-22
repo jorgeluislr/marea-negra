@@ -94,6 +94,8 @@ const ESPEQUE_MAX := 15.0
 @export var altura_dormido := 0.08
 
 var _espera := 0.0
+## Lo que va cargado. La cambia el barco para toda la batería (`Barco.municion_actual`).
+var municion: Municion = Municion.de("rasa")
 
 
 var _modelo: Node3D
@@ -133,9 +135,11 @@ func direccion_global() -> Vector3:
 	return -base.global_transform.basis.x.normalized()
 
 
-## Velocidad con que sale la bala.
+## Velocidad con que sale la bala: la de la pieza por la de la MUNICIÓN cargada. Al ir aquí, la
+## guía, `punto_de_caida`, `alcance_a` y el capitán de IA —que mide el alcance probando la pieza—
+## se enteran del tipo sin que nadie les cuente nada.
 func velocidad_salida() -> Vector3:
-	return direccion_global() * velocidad_bala
+	return direccion_global() * velocidad_bala * municion.factor_velocidad
 
 
 ## Dónde caerá el tiro si nadie se interpone: la parábola cortada por la lámina de agua.
@@ -165,10 +169,13 @@ func alcance_a(grados: float) -> float:
 
 
 ## La parábola muestreada, para dibujarla. Mismo cálculo que el vuelo de la bala.
+##
+## Acaba en la OLA que encontrará la bala al llegar (`Bala.tiempo_hasta_la_ola`), no en el plano: la
+## bala salpica en el mar que se dibuja, y la línea tiene que terminar donde salpica.
 func trayectoria(pasos := 24) -> PackedVector3Array:
 	var p0 := boca_global()
 	var v0 := velocidad_salida()
-	var t_fin := Bala.tiempo_hasta(p0, v0, altura_mar)
+	var t_fin := Bala.tiempo_hasta_la_ola(p0, v0, altura_mar)
 	var puntos := PackedVector3Array()
 	if t_fin <= 0.0:
 		return puntos
@@ -181,6 +188,11 @@ func listo() -> bool:
 	return _espera <= 0.0
 
 
+## Cuánto lleva recargado, de 0 (recién disparado) a 1 (listo). Lo pinta el anillo del HUD.
+func carga() -> float:
+	return 1.0 if recarga <= 0.0 else clampf(1.0 - _espera / recarga, 0.0, 1.0)
+
+
 ## Dispara si ha terminado de recargar. Devuelve si llegó a salir el tiro, para que quien
 ## manda la andanada sepa cuántas piezas respondieron.
 func disparar() -> bool:
@@ -191,7 +203,20 @@ func disparar() -> bool:
 	var vel := velocidad_salida()
 	var hacia := direccion_global()
 	disparo.emit(desde, hacia)
-	_soltar_bala(desde, vel)
+	if municion.proyectiles <= 1:
+		_soltar_bala(desde, vel)
+	else:
+		# La metralla se abre en cono alrededor del ánima. El reparto es uniforme en el DISCO del
+		# cono (raíz del radio), no en el ángulo: si no, los perdigones se amontonan en el centro.
+		var eje := vel.normalized()
+		var lado := eje.cross(Vector3.UP).normalized()
+		var arriba := lado.cross(eje).normalized()
+		var abre := tan(deg_to_rad(municion.dispersion))
+		for i in municion.proyectiles:
+			var r := sqrt(randf()) * abre
+			var a := randf() * TAU
+			var d := (eje + (lado * cos(a) + arriba * sin(a)) * r).normalized()
+			_soltar_bala(desde, d * vel.length())
 	_encender_fogonazo(desde, hacia)
 	_tronar(desde)
 	return true
@@ -275,8 +300,18 @@ func _soltar_bala(desde: Vector3, vel: Vector3) -> void:
 	var raiz := get_tree().current_scene
 	if raiz == null:
 		raiz = get_tree().root
+	b.municion = municion
 	raiz.add_child(b)
-	b.lanzar(desde, vel, altura_mar)
+	b.lanzar(desde, vel, altura_mar, municion, _barco_propio())
+
+
+func _barco_propio() -> Node:
+	var n := get_parent()
+	while n != null:
+		if n.has_method("canones_de"):
+			return n
+		n = n.get_parent()
+	return null
 
 
 ## Cuelga el `.glb` y lo orienta a su banda. El modelo apunta a −X, así que una pieza de

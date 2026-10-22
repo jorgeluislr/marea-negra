@@ -212,6 +212,24 @@ Es el único punto abierto del documento. Conservar la factura fuera del proyect
 
 ---
 
+## Imágenes del HUD — generación propia, plan de pago
+
+Cuatro imágenes 2D generadas en Meshy por el titular el 18-10-2026 con los prompts de
+`fuentes/prompts_meshy.md` («Iconos del HUD») y la carta del archipiélago (también de Meshy) como
+referencia de estilo. No se publicaron en la Community.
+
+| Original en `fuentes/crudo/hud/` | MB | Qué es | Procesadas en `assets/textures/ui/` |
+|---|---|---|---|
+| `Meshy_AI_bb7c4d77…png` | 1,34 | hoja de 9 iconos | `icono_*.png` |
+| `Meshy_AI_2744e8d1…png` | 1,05 | marco de latón | `marco_laton.png` |
+| `Meshy_AI_8741f128…png` | 1,54 | esfera de la rosa | `rosa_esfera.png` |
+| `Meshy_AI_1f700501…png` | 1,46 | cartela | `cartela.png`, `cartela_hud.png` |
+
+**Evidencia:** las cuatro conservan su `Zone.Identifier` con `HostUrl=https://www.meshy.ai/`. El
+procesado (`tools/procesar_iconos_hud.gd`) solo quita el fondo, recorta y escala.
+
+---
+
 ## Materiales de textura — CC0 de terceros
 
 A diferencia de los barcos y los props, que salen de Meshy, estos son **texturas PBR en mosaico**

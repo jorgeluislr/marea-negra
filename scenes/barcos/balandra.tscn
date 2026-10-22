@@ -72,7 +72,8 @@ empuje_delantera = 0.35
 empuje_trasera = 0.65
 angulo_muerto = 40.0
 angulo_optimo = 95.0
-nombre = "Balandra"
+nombre = "La Garza"
+tipo = "balandra"
 ; Cala 0,70 m: con los 0,47 que tenia, bastaba con que la flotacion se separase medio metro del
 ; agua para que asomara la obra viva entera, que es lo que se veia con mar normal. Medido con
 ; tools/entre_dos_olas.tscn: el fondo asomaba 0,028 m con la mar de siempre y con 0,70 no asoma

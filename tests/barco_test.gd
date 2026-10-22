@@ -20,6 +20,8 @@ static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 		await _cabeceo(m, arbol, b)
 	if m.escenario("masa"):
 		await _masa(m, arbol, b)
+	if m.escenario("ojo_del_viento"):
+		await _ojo_del_viento(m, arbol, b)
 	if m.escenario("cubierta"):
 		_cubierta(m, b)
 	if m.escenario("jarcia_solida"):
@@ -175,6 +177,70 @@ static func _masa(m: MarcoPruebas, arbol: SceneTree, b: Node3D) -> void:
 	m.mayor_que(v1 / maxf(v0, 0.01), 0.6, "y aproado conserva su arrancada un rato",
 		"%.2f m/s al segundo de aproar, de %.2f" % [v1, v0])
 	b.set("obediencia_escora", obed_previa)
+	Viento.variacion_fuerza = racha_previa
+	Viento.bamboleo_dir = bamboleo_previo
+	await _devolver(arbol, b, anclado_previo, rumbo_previo)
+
+
+# --- SALE DEL OJO DEL VIENTO CIANDO. Parado de proa al viento la vela no tira; el viento en el
+# aparejo la hace ciar, y con arrancada atrás la caña obra al revés: el barco cae a la banda
+# contraria a la caña (estribor → la proa a babor), sale de la zona muerta y vuelve a avanzar en
+# cuanto la vela porta. Con la masa del casco (`aceleracion` 0,29) la cía se quedaba en nada:
+# medido con `tools/ojo_del_viento.tscn`, −0,055 m/s y 4,4° girados en 30 s, sin salir nunca.
+static func _ojo_del_viento(m: MarcoPruebas, arbol: SceneTree, b: Node3D) -> void:
+	await UtilesPruebas.al_timon(arbol)
+	var rumbo_previo: float = b.global_rotation.y
+	var anclado_previo: bool = bool(b.get("anclado"))
+	var velas_previas := [bool(b.get("vela_delantera")), bool(b.get("vela_trasera"))]
+	var racha_previa := Viento.variacion_fuerza
+	var bamboleo_previo := Viento.bamboleo_dir
+	Viento.variacion_fuerza = 0.0
+	Viento.bamboleo_dir = 0.0
+	b.set("anclado", false)
+	b.call("set_vela_delantera", true)
+	b.call("set_vela_trasera", true)
+	var dm := Vector2(Viento.direccion_base.x, Viento.direccion_base.z).normalized()
+	b.global_rotation = Vector3(0.0, atan2(dm.x, dm.y), 0.0)
+	b.set("velocidad", 0.0)
+	b.set("velocity", Vector3.ZERO)
+	b.set("_guinada", 0.0)
+	var dt := 1.0 / float(Engine.physics_ticks_per_second)
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_D
+	ev.physical_keycode = KEY_D
+	ev.pressed = true
+	Input.parse_input_event(ev)
+	var previo: float = b.global_rotation.y
+	var girado := 0.0       # + = la proa cae a babor
+	var v_min := 0.0
+	var t_salida := -1.0
+	var girado_salida := 0.0
+	var t_avante := -1.0
+	var t := 0.0
+	while t < 50.0 and t_avante < 0.0:
+		await arbol.physics_frame
+		t += dt
+		girado += rad_to_deg(wrapf(b.global_rotation.y - previo, -PI, PI))
+		previo = b.global_rotation.y
+		var v: float = b.get("velocidad")
+		v_min = minf(v_min, v)
+		if t_salida < 0.0 and float(b.call("factor_viento")) > 0.05:
+			t_salida = t
+			girado_salida = girado
+		if t_salida >= 0.0 and v > 0.0:
+			t_avante = t
+	ev.pressed = false
+	Input.parse_input_event(ev)
+	m.menor_que(v_min, -0.2, "de proa al viento y parado, el viento la hace ciar",
+		"%.2f m/s" % v_min)
+	m.comprobar(t_salida >= 0.0 and t_salida < 40.0 and girado_salida > 0.0,
+		"y ciando con la caña a estribor sale de la zona muerta con la proa a babor",
+		"a los %.1f s, %+.1f°" % [t_salida, girado_salida] if t_salida >= 0.0
+			else "no sale en %.0f s: %+.1f° girados" % [t, girado])
+	m.comprobar(t_avante >= 0.0, "y vuelve a avanzar en cuanto la vela porta",
+		"a los %.1f s" % t_avante if t_avante >= 0.0 else "en %.0f s no avanza" % t)
+	b.call("set_vela_delantera", velas_previas[0])
+	b.call("set_vela_trasera", velas_previas[1])
 	Viento.variacion_fuerza = racha_previa
 	Viento.bamboleo_dir = bamboleo_previo
 	await _devolver(arbol, b, anclado_previo, rumbo_previo)

@@ -39,8 +39,9 @@ signal ancla_cambiada(anclada: bool)
 ## meter la caña la balandra ya giraba a 25,8 °/s, su giro entero. Y como la escora del giro va con
 ## `v·ω`, también la escora saltaba con la tecla — "como si no la frenara el peso del barco".
 @export var inercia_guinada := 1.2
-## Cuánto cía de proa al viento, en fracción de `velocidad_max`. Ver la propulsión: dentro de la
-## zona muerta la vela no tira y el aparejo empuja hacia atrás.
+## Lo que el viento de proa empuja hacia atrás al aparejo y a la obra muerta, en fracción del
+## EMPUJE a toda vela (no de `velocidad_max`). Ver la propulsión: dentro de la zona muerta la vela
+## no tira y esto la hace ciar.
 @export_range(0.0, 0.5) var cia_en_el_ojo := 0.08
 @export var angulo_muerto := 45.0
 @export var angulo_optimo := 100.0
@@ -48,6 +49,9 @@ signal ancla_cambiada(anclada: bool)
 @export_range(0.0, 1.0) var empuje_trasera := 0.6     # propulsión que aporta la vela trasera
 @export var sesgo_giro_velas := 0.5                    # giro por balance de velas (rad/s a plena vela)
 @export var nombre := "Barco"                          # nombre para el HUD/selector
+## Qué clase de barco es («balandra», «goleta»…). Va aparte del nombre para que el HUD pueda
+## decir las dos cosas: el nombre es propio y el tipo es el aparejo.
+@export var tipo := ""
 @export var altura_flotacion := 1.74                   # Y a la que flota (línea de cubierta sobre el agua)
 ## Si este casco lleva TAPA DE SENTINA: una chapa opaca a la altura de la lámina, dentro del
 ## casco, que impide ver el mar por sus aberturas.
@@ -198,8 +202,59 @@ signal ancla_cambiada(anclada: bool)
 ## balandra valga en el mundo y en una escena de pruebas con el mar a otra altura.
 @export var altura_mar := INF
 ## Balas en la santabárbara. Cada disparo gasta una.
-@export var municion := 60
 @export_group("")
+
+@export_group("Daños")
+## Fracción de la reserva de flotabilidad que mete UNA vía de agua por segundo. Con 0,012 una vía
+## sola llenaría el barco en 83 s si nadie achicara.
+@export var caudal_via := 0.012
+## Lo que achican las bombas por segundo: vía y media. Con una vía el barco se mantiene seco; con
+## tres, entra el doble de lo que sale y se va a pique en poco más de un minuto.
+@export var achique := 0.018
+## Metros por encima de la lámina en que un impacto todavía cuenta como en la flotación: el balance
+## mete esa franja en el agua a cada bandazo, así que un agujero ahí embarca agua.
+@export var franja_flotacion := 0.30
+## Metros que se hunde el casco con la reserva llena, antes de irse a pique.
+@export var calado_inundado := 0.45
+## Cuánta velocidad le quita el agua embarcada, con la reserva llena: un casco anegado pesa y no anda.
+@export_range(0.0, 1.0) var frenada_inundado := 0.6
+@export_group("")
+
+## Las zonas del casco, como fracciones de su eslora en la flotación desde la roda: la proa es el
+## primer cuarto y la popa el último quinto; el centro se parte por crujía en babor y estribor. Son
+## las del icono de daños del HUD, que las lee de aquí para no dibujar unas zonas y dañar otras.
+const ZONA_PROA := 0.25
+const ZONA_POPA := 0.2
+## Capa 8: las DIANAS, la madera de verdad del casco y la cubierta, que es lo que mira la bala.
+const CAPA_DIANAS := 128
+
+## Balas en el pañol, por tipo (`Municion.TIPOS`). La rasa es la de siempre; la palanqueta y la
+## metralla son cargas especiales y se embarcan menos.
+var pertrechos := {"rasa": 60, "palanqueta": 15, "metralla": 10}
+## Lo que se carga en la batería entera. Cambiarlo recarga el tipo en todas las piezas, y con él su
+## velocidad de boca: la guía y el capitán de IA lo ven solos, porque preguntan a la pieza.
+var municion_actual := "rasa":
+	set(v):
+		if not pertrechos.has(v):
+			return
+		municion_actual = v
+		for c in _canones:
+			c.municion = Municion.de(v)
+## La reserva del tipo cargado. Es lo que gastan los disparos y lo que pinta el panel.
+var municion: int:
+	get:
+		return int(pertrechos.get(municion_actual, 0))
+	set(v):
+		pertrechos[municion_actual] = v
+## Agua embarcada, en fracción de la reserva de flotabilidad (0 seco, 1 a pique).
+var agua_embarcada: float:
+	get:
+		return _averias.agua if _averias != null else 0.0
+var hundido: bool:
+	get:
+		return _averias != null and _averias.hundido
+var _averias: Averias
+var _dianas: StaticBody3D
 
 ## Cuántas estaciones de flotación se reparten a lo largo de la ESLORA. De ahí sale la rejilla
 ## entera: el paso es la eslora entre este número, y a lo ancho se ponen las que quepan con ese
@@ -361,6 +416,10 @@ var banda_apuntada := "estribor"
 ## Con true están vivos los controles de artillería y se dibuja la guía. Lo enciende quien
 ## gobierna (el mando del jugador con B, o un capitán de IA cuando decide entrar en combate).
 var modo_battle := false
+## Integridad por zona del casco, de 1 (sana) a 0 (destrozada). Es la ÚNICA fuente: el HUD la
+## lee y no guarda copia. Hoy nada la baja —el modelo de daños está por hacer—, pero las zonas y
+## la escala quedan fijadas para que quien lo haga solo tenga que escribir aquí.
+var integridad := {"proa": 1.0, "babor": 1.0, "estribor": 1.0, "popa": 1.0, "aparejo": 1.0}
 ## Línea de regala que deja `_montar_colisiones`, reaprovechada para saber a qué altura
 ## pasa la borda bajo cada pieza: es lo que decide si el tiro es a barbeta o por porta.
 var _regala_centros: Array[float] = []
@@ -692,19 +751,25 @@ func periodo_balance() -> float:
 ##
 ## - lo que hay que recorrer sin empuje es el arco de la zona muerta entera, `R · 2·angulo_muerto`,
 ##   con `R = velocidad_max / velocidad_giro` el radio de giro con la caña a la banda;
-## - sin empuje frena el agua con el cuadrado de la velocidad, y así la velocidad cae de forma
-##   EXPONENCIAL con la distancia: `v(s) = v₀ · exp(−s · aceleracion / velocidad_max²)`;
-## - y hay que llegar con más arrancada de la que el viento de proa le quita ciando, o el timón se
-##   queda sin agua: el doble de la velocidad de equilibrio de `cia_en_el_ojo`.
+## - sin empuje la frenan el agua, con el cuadrado de la velocidad, y el viento de proa en el
+##   aparejo, una fuerza fija `K = cia_en_el_ojo · cos medio · fuerza²` (en la zona muerta la vela
+##   flamea entera). Con las dos, `v² + K·v_max²` cae de forma EXPONENCIAL con la distancia:
+##   `(v² + K·v_max²)(s) = (v₀² + K·v_max²) · exp(−2·s · aceleracion / v_max²)`;
+## - y hay que llegar al otro lado con arrancada para que la caña aún muerda: `velocidad_max ·
+##   cia_en_el_ojo · fuerza`, 0,36 m/s en la balandra, 2 °/s de giro.
 ##
-## En la balandra son 14 m de arco y 0,88 m/s. Con la `aceleracion` de 2 m/s² que tuvo —siete
-## veces lo que su peso permite— salían 2,9, ceñía a 1,6, y el capitán perdía la virada en el ojo
-## 25° antes de cruzarlo.
+## En la balandra son 14 m de arco y 0,97 m/s (la física sola da 0,83 sin margen). Con la
+## `aceleracion` de 2 m/s² que tuvo —siete veces lo que su peso permite— salían 2,9, ceñía a 1,6, y
+## el capitán perdía la virada en el ojo 25° antes de cruzarlo.
 func velocidad_para_virar() -> float:
 	var radio: float = velocidad_max / maxf(velocidad_giro, 0.01)
-	var arco: float = radio * deg_to_rad(2.0 * angulo_muerto)
-	var v_salida: float = 2.0 * velocidad_max * cia_en_el_ojo * maxf(Viento.fuerza, 0.05)
-	return v_salida * exp(arco * aceleracion / maxf(velocidad_max * velocidad_max, 0.01))
+	var muerto := deg_to_rad(angulo_muerto)
+	var arco: float = radio * 2.0 * muerto
+	var v2 := maxf(velocidad_max * velocidad_max, 0.01)
+	var f := maxf(Viento.fuerza, 0.05)
+	var k: float = cia_en_el_ojo * (sin(muerto) / maxf(muerto, 0.01)) * f * f * v2
+	var v_salida: float = velocidad_max * cia_en_el_ojo * f
+	return sqrt(maxf((v_salida * v_salida + k) * exp(2.0 * arco * aceleracion / v2) - k, 0.0))
 
 
 ## Velocidad de guiñada que el casco lleva, en rad/s, positiva hacia babor (el sentido de
@@ -762,16 +827,17 @@ func _aplicar_inclinacion() -> void:
 ## distancia es de metros y la caída va con el CUADRADO de ella — a 100 m son ocho décimas de
 ## milímetro.
 func _altura_de_flotacion() -> float:
-	var y := _y_mar
+	# El agua embarcada hunde el casco, y a pique se lo lleva al fondo.
+	var y := _y_mar - (_averias.calado_extra() if _averias != null else 0.0)
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
 		return y
-	var hundido := Horizonte.caida_entre(global_position, cam.global_position)
+	var caida := Horizonte.caida_entre(global_position, cam.global_position)
 	# Cuando ni el tope del palo asoma ya no hay nada que dibujar. Sin esto el barco seguiría
 	# ahí abajo, gastando y asomando por los reflejos.
 	if _alto > 0.0:
-		visible = hundido < _alto
-	return y - hundido
+		visible = caida < _alto
+	return y - caida
 
 
 ## El perfil del casco en la flotación: medio ancho por rebanada, en metros y en ejes del barco.
@@ -1035,6 +1101,10 @@ func _ready() -> void:
 	if tapa_sentina:
 		_poner_tapa.call_deferred()
 	_preparar_timon()
+	_averias = Averias.new()
+	_averias.name = "Averias"
+	_averias.barco = self
+	add_child(_averias)
 	for h in get_children():
 		if h.has_method("izar"):
 			_velas.append(h)
@@ -1045,6 +1115,7 @@ func _ready() -> void:
 	# que la primera orden tiene que ir detrás de su montaje.
 	if colision_casco != "":
 		_montar_colisiones.call_deferred()
+		_montar_dianas.call_deferred()
 	if not cargamento.is_empty():
 		_montar_carga.call_deferred()
 	if not acabado_madera.is_empty():
@@ -1112,6 +1183,8 @@ func _physics_process(delta: float) -> void:
 
 	# Propulsión: viento × ángulo × superficie de vela abierta.
 	var objetivo := velocidad_max * factor_viento() * Viento.fuerza * _factor_velas()
+	# Anegado anda menos, y a pique no anda.
+	objetivo *= 0.0 if hundido else 1.0 - frenada_inundado * agua_embarcada
 	# **El viento por la proa empuja hacia atrás, y hay que restarlo SIEMPRE.** La vela deja pasar
 	# el viento cuando flamea, pero el aparejo, los palos y la obra muerta siguen recibiéndolo, y
 	# eso hace ciar. Va con lo de cara que venga el viento, no como un caso aparte dentro de la
@@ -1122,21 +1195,33 @@ func _physics_process(delta: float) -> void:
 	#
 	# Que exista importa más que cuánto valga: es lo que permite salir del ojo del viento, porque
 	# con arrancada atrás la caña obra al revés y el barco cae a la banda que se le pida.
+	#
+	# **Y es una FUERZA, no una velocidad que se resta.** Restada de `objetivo` entraba al cuadrado
+	# en la ley de abajo: 0,08² de `aceleracion`, 0,002 m/s², unos 24 N contra 12,8 t. Con la masa
+	# del casco eso no hacía ciar a nadie —medido con `tools/ojo_del_viento.tscn`, −0,055 m/s y 4,4°
+	# girados en 30 s con la caña a la banda, y no salía nunca—. Ahora es `cia_en_el_ojo` del EMPUJE
+	# a toda vela: 0,08 de 3,7 kN son unos 300 N, lo que el palo, la jarcia, la lona flameando y la
+	# obra muerta de un casco de 12 m reciben con viento fresco. Va con lo DESVENTADA que esté la
+	# vela (`1 − factor_viento`, el mismo número del flameo y del audio): la lona que porta ya tiene
+	# su resistencia dentro de la polar, la que flamea no. Así la ceñida de 65° anda lo mismo que
+	# antes (1,46 m/s contra 1,45) y de proa al viento sale en unos 30 s.
+	var v2 := velocidad_max * velocidad_max
+	var empuje := objetivo * absf(objetivo) / maxf(v2, 0.01)
 	var w := Viento.direccion
 	w.y = 0.0
 	if w.length() > 0.001:
 		# 1 = el viento justo de cara, 0 = de través o de popa.
 		var de_cara: float = maxf(_proa_horizontal().dot(-w.normalized()), 0.0)
-		objetivo -= velocidad_max * cia_en_el_ojo * de_cara * Viento.fuerza
+		var desventa: float = 1.0 - clampf(factor_viento(), 0.0, 1.0)
+		empuje -= cia_en_el_ojo * de_cara * desventa * Viento.fuerza * Viento.fuerza
 	# **Empuje contra la resistencia del agua, que va con el CUADRADO de la velocidad.** Con los
-	# dos en la misma escala la velocidad de régimen de cada rumbo es exactamente `objetivo`, como
-	# antes; lo que cambia es cómo se llega. Antes era `move_toward` a `aceleracion` constante, igual
-	# para frenar que para arrancar, y aproado a 1,4 m/s el casco se paraba en 0,7 s: no había
-	# virada por avante posible con un casco que tarda en girar. Ahora sin empuje pierde arrancada
-	# poco a poco (`v₀ / (1 + a·v₀·t / v_max²)`), y con todo el empuje arranca a `aceleracion`.
-	var v2 := velocidad_max * velocidad_max
-	velocidad += aceleracion * (objetivo * absf(objetivo) - velocidad * absf(velocidad)) \
-		/ maxf(v2, 0.01) * delta
+	# dos en la misma escala la velocidad de régimen de cada rumbo con viento a favor es
+	# exactamente `objetivo`, como antes; lo que cambia es cómo se llega. Antes era `move_toward` a
+	# `aceleracion` constante, igual para frenar que para arrancar, y aproado a 1,4 m/s el casco se
+	# paraba en 0,7 s: no había virada por avante posible con un casco que tarda en girar. Ahora sin
+	# empuje pierde arrancada poco a poco (`v₀ / (1 + a·v₀·t / v_max²)`), y con todo el empuje
+	# arranca a `aceleracion`.
+	velocidad += aceleracion * (empuje - velocidad * absf(velocidad) / maxf(v2, 0.01)) * delta
 
 	# **El barco CONSERVA su movimiento: el timón lo guía, no lo empuja.** La velocidad es un
 	# vector con su propia inercia, no un escalar clavado a la proa. Cuando la proa gira, el
@@ -1215,7 +1300,16 @@ func _factor_velas() -> float:
 		f += empuje_delantera
 	if vela_trasera:
 		f += empuje_trasera
-	return f
+	# Lona agujereada, perchas tocadas y jarcia segada: el aparejo empuja en proporción a lo que
+	# le queda. Va AQUÍ y no en `factor_viento`, que es la curva del CASCO con el viento y la usa
+	# el capitán para elegir rumbo: un aparejo roto no ciñe menos, empuja menos.
+	return f * float(integridad.get("aparejo", 1.0))
+
+
+## Superficie de vela útil, de 0 a ~1: la que está izada por lo que queda del aparejo. Es la que
+## propulsa y escora.
+func superficie_velica() -> float:
+	return _factor_velas()
 
 
 # La trasera abierta tiende a ORZAR (girar hacia el viento); la delantera a ARRIBAR
@@ -1734,6 +1828,7 @@ func _montar_artilleria() -> void:
 			continue
 		var c := a.instanciar()
 		c.altura_mar = _altura_del_mar()
+		c.municion = Municion.de(municion_actual)
 		contenedor.add_child(c)
 		_canones.append(c)
 	if get_node_or_null(^"GuiaTiro") == null and not _canones.is_empty():
@@ -1764,6 +1859,66 @@ func disparar_banda() -> int:
 			salieron += 1
 			municion -= 1
 	return salieron
+
+
+## La llama la BALA al alcanzar cualquier cuerpo de este barco (misma convención que la boya y que
+## `on_interact`). El modelo de daños vive en `Averias`.
+func recibir_impacto(donde: Vector3, _energia: float, quien: Node) -> void:
+	if _averias != null:
+		_averias.recibir(donde, quien)
+
+
+## Si este barco tiene DIANAS: su casco y su cubierta como cuerpo de colisión propio. Con ellas la
+## bala se salta la caja del `CharacterBody3D`, que lleva dentro el aire de las esquinas.
+func tiene_dianas() -> bool:
+	return _dianas != null
+
+
+func vias_de_agua() -> int:
+	return _averias.vias.size() if _averias != null else 0
+
+
+func vias_en(zona: String) -> int:
+	return _averias.vias_en(zona) if _averias != null else 0
+
+
+## Deja el barco como salió del astillero: todas las zonas sanas, sin vías, seco y sin agujeros.
+func reparar() -> void:
+	if _averias != null:
+		_averias.reparar()
+
+
+## La zona que tocaría un impacto en `donde` contra el cuerpo `cuerpo` (ver `Averias.zona_de`).
+func zona_de(donde: Vector3, cuerpo: Object = null) -> String:
+	return _averias.zona_de(donde, cuerpo) if _averias != null else ""
+
+
+## Las dianas: el casco y las mallas de cubierta tal cual, como cuerpo estático en la capa 8. Son
+## las mismas mallas con las que se levantan las colisiones de cubierta, así que no hay que
+## escribir una forma a mano para ningún barco que ya se pueda pisar.
+func _montar_dianas() -> void:
+	var mallas: Array[String] = [colision_casco]
+	mallas.append_array(colision_mallas_suelo)
+	var cuerpo := StaticBody3D.new()
+	cuerpo.name = "Dianas"
+	cuerpo.collision_layer = CAPA_DIANAS
+	cuerpo.collision_mask = 0
+	var hay := 0
+	for nombre_malla in mallas:
+		var mi := _malla(nombre_malla)
+		if mi == null or mi.mesh == null:
+			continue
+		var cs := CollisionShape3D.new()
+		cs.name = "Diana_" + nombre_malla
+		cs.shape = mi.mesh.create_trimesh_shape()
+		cs.transform = _relativo(mi)
+		cuerpo.add_child(cs)
+		hay += 1
+	if hay == 0:
+		cuerpo.free()
+		return
+	add_child(cuerpo)
+	_dianas = cuerpo
 
 
 ## Altura de la regala bajo un punto del mundo, interpolando la línea que se muestreó al

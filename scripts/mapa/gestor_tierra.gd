@@ -56,6 +56,9 @@ var _mutex := Mutex.new()
 var _tareas: Array[int] = []     # las de WorkerThreadPool aún sin esperar
 var _listo := false
 var _reloj := 0.0
+## Si la última revisión encontró celdas que tocan y no estaban ni puestas ni pedidas.
+var _queda := true
+var _revisado := false
 
 
 func _ready() -> void:
@@ -105,6 +108,18 @@ func silueta_celda(c: Vector2i) -> MeshInstance3D:
 
 func siluetas() -> int:
 	return _siluetas.size()
+
+
+## Si ya está puesto todo lo que toca alrededor del foco —detalle cercano y siluetas— y no queda nada
+## pedido ni a medio meter. La pantalla de carga (`Partida`) lo espera para no enseñar el mundo con
+## las islas apareciendo una a una.
+func al_dia() -> bool:
+	if not _listo or relieve == null or not relieve.listo() or not _revisado or _queda:
+		return false
+	_mutex.lock()
+	var hay_hechas := not _hechas.is_empty()
+	_mutex.unlock()
+	return _pedidas.is_empty() and _sil_pedidas.is_empty() and not hay_hechas
 
 
 func _process(delta: float) -> void:
@@ -166,6 +181,8 @@ func _revisar(p: Vector2) -> void:
 			break
 		_sil_pedidas[c] = true
 		_tareas.append(WorkerThreadPool.add_task(_construir_silueta.bind(c)))
+	_queda = not cerca.is_empty() or not lejos.is_empty()
+	_revisado = true
 	for c in _siluetas.keys():
 		if _distancia(c, p) > distancia_silueta_quitar:
 			var s: Node = _siluetas[c]

@@ -58,3 +58,7 @@ assets/models/*.png
 
 # Relieve del Caribe por celdas: lo regenera blender_src/relieve_caribe.py en unos minutos.
 assets/islas/relieve/
+
+# Vídeo de fondo del menú (lo graba tools/grabar_portada.tscn): pesa decenas de MB y se regenera;
+# va a Drive con los demás pesados. Sin él el menú se queda con el fondo liso.
+assets/video/*.ogv

@@ -40,10 +40,25 @@ static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 	if not m.comprobar(mio != null, "hay un barco del jugador"):
 		return
 
+	# El nivel y la semilla se FIJAN: los capitanes los toman de `Ajustes`, que se carga del
+	# `user://ajustes.cfg` del jugador, y la batería no puede depender de lo que él haya elegido.
+	var ajustes := arbol.root.get_node_or_null(^"Ajustes")
+	var nivel0 := String(ajustes.get("dificultad")) if ajustes != null and "dificultad" in ajustes else ""
+	var semilla0 := int(ajustes.get("semilla")) if ajustes != null and "semilla" in ajustes else 0
+	if nivel0 != "":
+		ajustes.set("dificultad", "normal")
+		ajustes.set("semilla", 1)
+
 	await _mando_no_compartido(m, arbol, mio)
 	await _cine_a_barlovento(m, arbol, mio)
 	await _pelea_dentro_de_su_alcance(m, arbol, mio)
 	await _presenta_la_banda(m, arbol, mio)
+	await _sale_del_ojo(m, arbol, mio)
+	await _elige_municion(m, arbol, mio)
+	await _dificultad(m, arbol, mio)
+	if nivel0 != "":
+		ajustes.set("dificultad", nivel0)
+		ajustes.set("semilla", semilla0)
 
 
 # ── 1. El mando no se comparte ───────────────────────────────────────────────
@@ -252,6 +267,16 @@ static func _presenta_la_banda(m: MarcoPruebas, arbol: SceneTree, mio: Node3D) -
 	if enemigo == null:
 		return
 	mio.set("anclado", true)
+	# **Nace de través al viento y con la proa al blanco**, para que tenga que maniobrar y presentar
+	# la banda. Nacía con el rumbo de la escena (0), que con este viento es la proa en el OJO y el
+	# blanco ya por el través: se quedaba clavado ahí como una batería flotante y soltaba 18 tiros.
+	# La prueba premiaba el bloqueo — cuando el capitán aprendió a salir del ojo ciando (21-10-2026)
+	# cayó 80° para coger arrancada, perdió la demora y bajó a 6. Salir del ojo tiene su propia
+	# prueba (`_sale_del_ojo`); esta mide la artillería.
+	enemigo.global_rotation = Vector3(0.0, deg_to_rad(90.0), 0.0)
+	enemigo.set("velocidad", 0.0)
+	enemigo.set("velocity", Vector3.ZERO)
+	enemigo.set("_guinada", 0.0)
 
 	var angulos: Array[float] = []
 	for n in enemigo.find_children("*", "", true, false):
@@ -309,6 +334,222 @@ static func _presenta_la_banda(m: MarcoPruebas, arbol: SceneTree, mio: Node3D) -
 	_retirar(enemigo)
 
 
+# ── 5. Sale del ojo del viento ciando ────────────────────────────────────────
+## Parado y con la proa clavada en el ojo, que es como nace una balandra en `tools/duelo.tscn` y
+## como queda tras perder una virada. El casco CÍA (`Barco.cia_en_el_ojo`) y con arrancada atrás
+## la caña obra al revés, así que el capitán tiene que meterla al contrario para abatir.
+##
+## Medido con `tools/capitan_en_el_ojo.tscn` antes del arreglo: **60 s de 60 en la zona muerta,
+## 58 ciando, no sale**, en los cuatro casos. Dos fallos: aproado exacto pedía caña 0 (el lado
+## salía del signo de un ángulo nulo y de una bordada que valía 0), y ciando metía la caña como si
+## fuera avante — desde 4° la proa volvía al ojo en 9 s y ahí oscilaba ±0,6°.
+##
+## El listón sale del casco y no del capitán: con la caña a tope el JUGADOR sale de la zona muerta
+## a los 29,3 s (`barco/ojo_del_viento`). Se le dan 45 s.
+const T_OJO := 45.0
+
+static func _sale_del_ojo(m: MarcoPruebas, arbol: SceneTree, mio: Node3D) -> void:
+	_viento(Vector3(1, 0, 0))
+	# Blanco de través: lo que pida el capitán cae fuera de la zona muerta, así que todo lo que
+	# tenga que hacer es salir de ella.
+	var enemigo := await _soltar_enemigo(arbol, mio, 0.0)
+	if enemigo == null:
+		return
+	enemigo.global_position = mio.global_position + Vector3(0.0, 0.0, 200.0)
+	mio.set("anclado", true)
+	var muerto := float(enemigo.get("angulo_muerto"))
+	var origen := Vector3(-1, 0, 0)
+	# Proa a −X, de donde viene el viento, parado y sin guiñada.
+	enemigo.global_rotation = Vector3(0.0, deg_to_rad(90.0), 0.0)
+	enemigo.set("velocidad", 0.0)
+	enemigo.set("velocity", Vector3.ZERO)
+	enemigo.set("_guinada", 0.0)
+	var salida := -1.0
+	var en_zona := 0.0
+	var t := 0.0
+	while t < T_OJO:
+		_viento(Vector3(1, 0, 0))
+		enemigo.set("anclado", false)
+		mio.set("anclado", true)
+		var dt := arbol.root.get_process_delta_time()
+		var proa := -enemigo.global_transform.basis.z
+		proa.y = 0.0
+		if rad_to_deg(proa.normalized().angle_to(origen)) < muerto:
+			en_zona += dt
+		elif salida < 0.0:
+			salida = t
+		t += dt
+		await arbol.process_frame
+	m.comprobar(salida >= 0.0, "el capitán sale del ojo del viento ciando",
+		("sale a los %.1f s" % salida) if salida >= 0.0 else "%.1f s de %.0f en la zona muerta"
+			% [en_zona, T_OJO])
+	m.menor_que(en_zona, T_OJO * 0.8, "no pasa la tirada con la proa en la zona muerta",
+		"%.1f s de %.0f" % [en_zona, T_OJO])
+	_retirar(enemigo)
+
+
+# ── 6. Elige la munición por la situación ────────────────────────────────────
+## La regla, acordada con el usuario el 21-10-2026: rasa por defecto y para rematar; palanqueta si
+## el blanco HUYE con el aparejo aún entero y a tiro de palanqueta; metralla solo a quemarropa.
+## Antes tiraba siempre rasa.
+##
+## Las distancias van en fracción del alcance que el capitán MIDE para cada tipo
+## (`alcance_de`), no en metros: la palanqueta llega a la mitad que la rasa porque sale más
+## despacio, y eso lo sabe la pieza.
+##
+## Los dos barcos fondeados; la huida se hace moviendo al blanco a mano por la línea que los une,
+## que es lo que el capitán lee (cómo se abre la distancia). Cada caso se sostiene 2 s: ocho
+## decisiones, de sobra para que la tasa de apertura (suavizada) pase su listón.
+static func _elige_municion(m: MarcoPruebas, arbol: SceneTree, mio: Node3D) -> void:
+	_viento(Vector3(1, 0, 0))
+	var enemigo := await _soltar_enemigo(arbol, mio, 0.0)
+	if enemigo == null:
+		return
+	var cap := enemigo.get_node_or_null(^"Capitan")
+	if not m.comprobar(cap != null and cap.has_method("alcance_de"),
+			"el capitán sabe el alcance de cada munición"):
+		_retirar(enemigo)
+		return
+	cap.set("pausa_municion", 0.0)
+	enemigo.set("pertrechos", {"rasa": 99, "palanqueta": 99, "metralla": 99})
+	var r_pal := float(cap.call("alcance_de", "palanqueta"))
+	var r_met := float(cap.call("alcance_de", "metralla"))
+	var r_ras := float(cap.call("alcance_de", "rasa"))
+	m.comprobar(r_met < r_pal and r_pal < r_ras, "cada munición llega a donde le toca",
+		"rasa %.0f m, palanqueta %.0f m, metralla %.0f m" % [r_ras, r_pal, r_met])
+
+	# [nombre, distancia, huye, casco del blanco, aparejo del blanco, metralla a bordo, esperada]
+	var casos := [
+		["a media distancia, el blanco quieto", r_pal * 0.7, false, 1.0, 1.0, 99, "rasa"],
+		["a media distancia, el blanco huye", r_pal * 0.7, true, 1.0, 1.0, 99, "palanqueta"],
+		["huye pero ya está desarbolado", r_pal * 0.7, true, 1.0, 0.3, 99, "rasa"],
+		["a quemarropa", r_met * 0.3, false, 1.0, 1.0, 99, "metralla"],
+		["a quemarropa con el casco deshecho", r_met * 0.3, false, 0.2, 1.0, 99, "rasa"],
+		["a quemarropa sin metralla a bordo", r_met * 0.3, false, 1.0, 1.0, 0, "rasa"],
+	]
+	for c in casos:
+		var lado := Vector3(0, 0, 1)
+		mio.global_position = enemigo.global_position + lado * float(c[1])
+		var p: Dictionary = enemigo.get("pertrechos")
+		p["metralla"] = int(c[5])
+		enemigo.set("municion_actual", "rasa")
+		var t := 0.0
+		while t < 2.0:
+			_viento(Vector3(1, 0, 0))
+			enemigo.set("anclado", true)
+			mio.set("anclado", true)
+			# Cada frame: un tocado del enemigo REPARA al blanco (ver `_soltar_enemigo`), y eso
+			# le devolvería la integridad a mitad de caso.
+			var integ: Dictionary = mio.get("integridad")
+			for z in ["proa", "babor", "estribor", "popa"]:
+				integ[z] = float(c[3])
+			integ["aparejo"] = float(c[4])
+			var dt := arbol.root.get_process_delta_time()
+			if bool(c[2]):
+				mio.global_position += lado * 3.0 * dt
+			t += dt
+			await arbol.process_frame
+		m.comprobar(String(enemigo.get("municion_actual")) == String(c[6]),
+			"munición %s: %s" % [c[0], c[6]],
+			"carga %s a %.0f m" % [enemigo.get("municion_actual"),
+				enemigo.global_position.distance_to(mio.global_position)])
+	if mio.has_method("reparar"):
+		mio.call("reparar")
+	_retirar(enemigo)
+
+
+# ── 7. Dificultad ────────────────────────────────────────────────────────────
+## El capitán acertaba demasiado (69-88 % en `tools/duelo.tscn`): su puntería prueba la pieza
+## hasta dejar el tiro a ±0,3 m. La dificultad, acordada con el usuario el 21-10-2026: tres
+## niveles que sortean en cada andanada un ERROR DE ESTIMA en metros sobre el blanco, que la cuña
+## y el espeque persiguen como si fuera el blanco de verdad. Se guarda en `Ajustes`, en
+## `user://ajustes.cfg`.
+##
+## Lo que se mide es el residuo del tiro contra el blanco VERDADERO en el instante de cada
+## andanada (`CapitanIA.andanada`), que es justo la variable que la dificultad cambia — no los
+## tocados, que dependen además de la mar y del casco.
+const T_PUNTERIA := 20.0
+
+static func _dificultad(m: MarcoPruebas, arbol: SceneTree, mio: Node3D) -> void:
+	var ajustes := arbol.root.get_node_or_null(^"Ajustes")
+	if not m.comprobar(ajustes != null and "dificultad" in ajustes and ajustes.has_method("cargar"),
+			"los ajustes tienen dificultad y se pueden cargar"):
+		return
+	# Se guarda y se lee en un archivo de PRUEBAS: el del jugador no se toca.
+	var ruta0: String = ajustes.get("ruta")
+	var nivel0: String = ajustes.get("dificultad")
+	ajustes.set("ruta", "user://ajustes_prueba.cfg")
+	ajustes.call("set_dificultad", "facil")
+	ajustes.set("dificultad", "dificil")
+	ajustes.call("cargar")
+	m.comprobar(String(ajustes.get("dificultad")) == "facil",
+		"la dificultad se guarda en user:// y se lee", "leída: %s" % ajustes.get("dificultad"))
+	var cap_suelto := CapitanIA.new()
+	m.comprobar(String(cap_suelto.call("nivel")) == "facil",
+		"el capitán toma la dificultad de los ajustes", "nivel %s" % cap_suelto.call("nivel"))
+	ajustes.set("dificultad", "normal")
+	m.comprobar(String(cap_suelto.call("nivel")) == "normal",
+		"y la sigue si cambia en partida", "nivel %s" % cap_suelto.call("nivel"))
+	cap_suelto.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://ajustes_prueba.cfg"))
+	ajustes.set("ruta", ruta0)
+	ajustes.set("dificultad", nivel0)
+
+	# Misma semilla, mismos errores: las pruebas y las medidas se pueden repetir.
+	var series := []
+	for s in [7, 7, 8]:
+		var c := CapitanIA.new()
+		c.set("dificultad", "normal")
+		c.call("set_semilla", s)
+		var l := []
+		for i in 5:
+			l.append(c.call("sortear_error"))
+		series.append(l)
+		c.free()
+	m.comprobar(series[0] == series[1] and series[0] != series[2],
+		"con la misma semilla el error sorteado se repite", str(series[0]))
+
+	# La dispersión de verdad, peleando: los dos fondeados, el blanco por el través a 150 m y a
+	# BARLOVENTO. Fondeado con el trapo arriba el casco escora a sotavento, y por esa banda la cuña
+	# tope (12°) solo llegaba a 101-132 m: el blanco a 148 quedaba fuera de alcance y fácil no
+	# disparaba nunca.
+	_viento(Vector3(1, 0, 0))
+	var enemigo := await _soltar_enemigo(arbol, mio, 0.0)
+	if enemigo == null:
+		return
+	var cap := enemigo.get_node_or_null(^"Capitan")
+	enemigo.global_rotation = Vector3.ZERO
+	enemigo.global_position = mio.global_position + Vector3(150.0, 0.0, 0.0)
+	var rms := {}
+	for nivel in ["facil", "normal", "dificil"]:
+		cap.set("dificultad", nivel)
+		cap.call("set_semilla", 11)
+		var errores: Array[float] = []
+		var anota := func(r: Dictionary):
+			errores.append(Vector2(float(r["largo"]), float(r["traves"])).length())
+		cap.connect("andanada", anota)
+		var t := 0.0
+		while t < T_PUNTERIA:
+			_viento(Vector3(1, 0, 0))
+			enemigo.set("anclado", true)
+			mio.set("anclado", true)
+			t += arbol.root.get_process_delta_time()
+			await arbol.process_frame
+		cap.disconnect("andanada", anota)
+		var suma := 0.0
+		for e in errores:
+			suma += e * e
+		rms[nivel] = sqrt(suma / maxf(float(errores.size()), 1.0)) if not errores.is_empty() else -1.0
+		m.mayor_que(float(errores.size()), 3.0, "en %s dispara" % nivel,
+			"%d andanadas en %.0f s, residuo cuadrático %.1f m" % [errores.size(), T_PUNTERIA, rms[nivel]])
+	m.comprobar(rms["facil"] > rms["normal"] and rms["normal"] > rms["dificil"],
+		"la dificultad ordena la puntería: fácil peor que normal, normal peor que difícil",
+		"residuo %.1f / %.1f / %.1f m" % [rms["facil"], rms["normal"], rms["dificil"]])
+	if mio.has_method("reparar"):
+		mio.call("reparar")
+	_retirar(enemigo)
+
+
 # ── Andamiaje ────────────────────────────────────────────────────────────────
 ## Mete un barco enemigo en el mundo con su capitán puesto.
 ##
@@ -336,6 +577,14 @@ static func _soltar_enemigo(arbol: SceneTree, mio: Node3D, distancia: float) -> 
 	# Que cargue el modelo, monte la artillería y la tela se estabilice.
 	for i in 180:
 		await arbol.process_frame
+	# **El blanco de este paquete no se rompe.** Desde que las balas dañan (19-10-2026, paquete
+	# `municion`), el enemigo HUNDÍA al jugador en 45 s de cañoneo: el capitán se quedaba sin blanco
+	# y su timón daba 40 bandazos, y el resto de la batería corría con el barco en el fondo. Aquí se
+	# mide cómo gobierna y apunta, no lo que rompe, así que cada impacto deja al jugador como estaba.
+	if mio.has_method("reparar"):
+		for n in b.find_children("*", "", true, false):
+			if n.has_signal("impacto") and n.has_method("disparar"):
+				n.connect("impacto", func(_d: Vector3, _c: Node): mio.call("reparar"))
 	return b
 
 

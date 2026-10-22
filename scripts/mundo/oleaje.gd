@@ -290,6 +290,15 @@ func asentar() -> void:
 	_recalcular()
 
 
+## Pone la mar YA rodando con el viento de fondo, sin el rolar lento de `inercia_rumbo`. Es para el
+## arranque: el nodo `Clima` pone el viento de la fecha cuando la mar ya ha nacido con el de fábrica,
+## y rolarla desde ahí barrería el mar entero de lado durante el primer minuto. A diferencia de
+## `asentar()`, no toca la fuerza ni las fases: el giro va corregido en el pivote como cualquier otro.
+func rolar_de_golpe() -> void:
+	_eje = _rumbo_del_viento()
+	_recalcular()
+
+
 ## Desplazamiento del punto de superficie que en reposo estaba en `p` (x,z de mundo).
 ## y = cuánto sube, xz = cuánto se corre hacia la cresta. Espejo de `oleaje_desplaz()`.
 func desplazamiento(p: Vector2, reloj := -1.0) -> Vector3:

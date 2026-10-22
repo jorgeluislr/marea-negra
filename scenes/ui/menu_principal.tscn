@@ -1,0 +1,122 @@
+[gd_scene format=3 uid="uid://b8gm3gq2amsde"]
+
+[ext_resource type="Script" uid="uid://bh3tmi5iuc1ta" path="res://scripts/ui/menu_principal.gd" id="1"]
+[ext_resource type="Script" uid="uid://dvx4ajo7c0428" path="res://scripts/mundo/musica.gd" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/ui/menu_ajustes.tscn" id="3"]
+[ext_resource type="Texture2D" uid="uid://dl0l04o2njtfp" path="res://assets/textures/ui/titulo_menu.png" id="4"]
+
+[node name="MenuPrincipal" type="Control" unique_id=1039813701]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1")
+
+[node name="Liso" type="ColorRect" parent="." unique_id=1687953815]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.067, 0.122, 0.161, 1)
+
+[node name="Fondo" type="VideoStreamPlayer" parent="." unique_id=799611948]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand = true
+
+[node name="Titulo" type="TextureRect" parent="." unique_id=2024728162]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -330.0
+offset_top = 16.0
+offset_right = 330.0
+offset_bottom = 360.0
+grow_horizontal = 2
+mouse_filter = 2
+texture = ExtResource("4")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Panel" type="PanelContainer" parent="." unique_id=1924157056]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_left = 64.0
+offset_top = -300.0
+offset_right = 504.0
+offset_bottom = 300.0
+grow_vertical = 2
+
+[node name="Lista" type="VBoxContainer" parent="Panel" unique_id=964443641]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Navegar" type="Button" parent="Panel/Lista" unique_id=170841693]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Navegar el Caribe"
+
+[node name="BatallaRapida" type="Button" parent="Panel/Lista" unique_id=273083260]
+layout_mode = 2
+text = "Batalla rápida"
+
+[node name="TiroAlBlanco" type="Button" parent="Panel/Lista" unique_id=929494800]
+layout_mode = 2
+text = "Tiro al blanco"
+
+[node name="DueloCapitanes" type="Button" parent="Panel/Lista" unique_id=848694849]
+layout_mode = 2
+text = "Duelo de capitanes"
+
+[node name="Tormenta" type="Button" parent="Panel/Lista" unique_id=56542060]
+layout_mode = 2
+text = "Tormenta"
+
+[node name="Separador" type="HSeparator" parent="Panel/Lista" unique_id=1336565301]
+layout_mode = 2
+
+[node name="Ajustes" type="Button" parent="Panel/Lista" unique_id=1769123738]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Ajustes"
+
+[node name="Separador2" type="HSeparator" parent="Panel/Lista" unique_id=626106341]
+layout_mode = 2
+
+[node name="Salir" type="Button" parent="Panel/Lista" unique_id=1621475982]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Salir"
+
+[node name="MenuAjustes" parent="." unique_id=666244803 instance=ExtResource("3")]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_left = 64.0
+offset_top = -230.0
+offset_right = 504.0
+offset_bottom = 230.0
+grow_vertical = 2
+
+[node name="Musica" type="AudioStreamPlayer" parent="." unique_id=1253189589]
+volume_db = 5.0
+script = ExtResource("2")

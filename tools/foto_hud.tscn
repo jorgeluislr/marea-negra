@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tools/foto_hud.gd" id="1"]
+
+[node name="FotoHud" type="Node"]
+script = ExtResource("1")

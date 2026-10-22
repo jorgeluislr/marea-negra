@@ -22,6 +22,11 @@ extends Node
 ## invertido en esa situación es imposible en el mar y solo podía salir de este desajuste.
 @export var velocidad_m_s := 16.0
 
+## Si `direccion_base` sale de la fecha del juego (`Calendario` + `ClimaCaribe`). Lo enciende el
+## nodo `Clima` de la escena principal; apagado, las pruebas y herramientas fijan el viento a mano
+## como siempre. Solo gobierna la DIRECCIÓN: la fuerza sigue siendo `fuerza_base`.
+var seguir_calendario := false
+
 var direccion := Vector3(1, 0, 0)
 var fuerza := 1.0
 var _t := 0.0
@@ -33,6 +38,8 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_t += delta
+	if seguir_calendario:
+		aplicar_calendario()
 	# Ráfagas: la fuerza sube y baja con varias frecuencias superpuestas.
 	var g := 0.5 * sin(_t * 0.7) + 0.3 * sin(_t * 1.9 + 1.0) + 0.2 * sin(_t * 3.3)
 	fuerza = maxf(0.0, fuerza_base * (1.0 + variacion_fuerza * g))
@@ -40,6 +47,11 @@ func _process(delta: float) -> void:
 	var base := direccion_base.normalized()
 	var ang := bamboleo_dir * sin(_t * 0.5)
 	direccion = base.rotated(Vector3.UP, ang)
+
+
+## Pone `direccion_base` en la del clima de la fecha de ahora.
+func aplicar_calendario() -> void:
+	direccion_base = ClimaCaribe.direccion(Calendario.instante)
 
 
 ## Viento APARENTE que siente algo que se mueve a `velocidad`: el real menos su propia marcha.

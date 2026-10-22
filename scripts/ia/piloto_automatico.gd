@@ -42,6 +42,9 @@ func _process(delta: float) -> void:
 	cap.name = "Capitan"
 	cap.bando = bando
 	cap.pericia = pericia
+	# La dificultad de los ajustes es la de los ENEMIGOS: en «fácil» el piloto del jugador
+	# apuntaría tan mal como ellos, que es justo lo contrario de lo que pide quien la baja.
+	cap.dificultad = "dificil"
 	# `configurar` no se le va a llamar —el barco ya hizo su `_ready` hace rato—, así que el
 	# capitán se busca el barco solo por su padre. Por eso `CapitanIA` admite las dos vías.
 	b.add_child(cap)

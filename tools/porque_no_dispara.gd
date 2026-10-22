@@ -275,6 +275,17 @@ func _soltar_balandra(donde: Vector3, con_capitan: bool, bando := "enemigo") -> 
 	b.global_position = Vector3(donde.x, b.global_position.y, donde.z)
 	b.set("anclado", true)
 	await _esperar(ESPERA)
+	# Aquí se mide la PUNTERÍA, no lo que rompe: el barco que reciba un tiro se repara en el acto.
+	# Desde que las balas dañan (19-10-2026), el fondeado de la caza se iba a pique a mitad de tirada
+	# y el capitán, sin blanco, dejaba de disparar — 10 tiros en 45 s donde había 18.
+	for n in b.find_children("*", "", true, false):
+		if n.has_signal("impacto") and n.has_method("disparar"):
+			n.connect("impacto", func(_d: Vector3, contra: Node):
+				var x := contra
+				while x != null and not x.has_method("reparar"):
+					x = x.get_parent()
+				if x != null:
+					x.call("reparar"))
 	return b
 
 
