@@ -14,8 +14,8 @@ Qué hace:
 2. Se queda con lo que toca el rectángulo del Caribe; la tierra firme (América es UN polígono en este
    fichero) se recorta a ese rectángulo con Sutherland-Hodgman.
 3. Lleva cada punto al mundo con la misma proyección que `Archipielago.de_lat_lon()`:
-   equirrectangular centrada en `ORIGEN`, a escala `ESCALA` (1/25, decidido con el usuario el
-   17-10-2026). El norte es −Z.
+   equirrectangular centrada en `ORIGEN`, a escala `ESCALA` (1/25 el 17-10-2026; 1/12 desde el
+   23-10-2026, para que las islas tengan sitio para puertos a escala real). El norte es −Z.
 4. Simplifica (Douglas-Peucker) a `TOLERANCIA` metros de JUEGO y descarta lo que no llega a
    `AREA_MIN`.
 5. Pone nombre a las islas conocidas: el polígono que contiene el punto del nomenclátor.
@@ -39,7 +39,7 @@ LON = (-88.0, -59.0)
 # barco nacería en tierra (Haití) y Norman Island quedaría a 38 km, más allá de lo que aguanta la
 # precisión simple sin origen flotante.
 ORIGEN = (18.385, -64.62)
-ESCALA = 1.0 / 25.0
+ESCALA = 1.0 / 12.0
 TOLERANCIA = 3.0      # m de juego (75 m reales)
 AREA_MIN = 30.0       # m² de juego
 CERCA = 200.0         # m de juego: hasta dónde se busca la isla de un nombre que cae en el agua

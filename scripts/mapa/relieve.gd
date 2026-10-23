@@ -18,8 +18,15 @@ extends Resource
 ## Dónde están los ficheros. Ojo al exportar: no son recursos de Godot, el filtro de exportación
 ## tiene que incluir `*.alt`, `*.bin` y `*.json` de esta carpeta.
 @export_dir var carpeta := "res://assets/islas/relieve"
-## Fondo que se da fuera de las celdas, en metros.
-@export var fondo := -25.0
+## Fondo que se da fuera de las celdas, en metros: el tope de profundidad del generador.
+@export var fondo := -40.0
+## Metros de juego por metro REAL de relieve. Las celdas de dos capas (las de los mapas de altura
+## reales) guardan la playa y el fondo en metros de juego y el relieve en metros reales, y aquí se
+## componen: `base + escala_vertical · relieve`. Cambiarla no obliga a regenerar nada. Las celdas
+## antiguas, de una capa, traen la escala ya aplicada (1/8) y no la siguen. 1/12, IGUAL que la
+## escala en planta (`Archipielago.escala`): las pendientes son las reales, sin exagerar. Elegido
+## por el usuario el 23-10-2026 tras comparar fotos (`tools/foto_relieve.tscn`).
+@export var escala_vertical := 1.0 / 12.0
 
 var celda := 1000.0
 var paso := 4.0
@@ -27,7 +34,7 @@ var lado := 251
 var basto := 10
 var lado_basto := 26
 
-var _indice := {}            # Vector2i -> posición en basto.bin
+var _indice := {}            # Vector2i -> Vector2i(byte en basto.bin, capas)
 var _bastos := PackedByteArray()
 var _cache := {}             # Vector2i -> PackedFloat32Array, las últimas leídas
 var _orden_cache: Array[Vector2i] = []
@@ -50,10 +57,11 @@ func cargar() -> void:
 	basto = int(d["basto"])
 	lado_basto = (lado - 1) / basto + 1
 	var indice := {}
-	var i := 0
+	var pos := 0
 	for e in d["celdas"]:
-		indice[Vector2i(int(e["c"][0]), int(e["c"][1]))] = i
-		i += 1
+		var capas := int(e.get("capas", 1))
+		indice[Vector2i(int(e["c"][0]), int(e["c"][1]))] = Vector2i(pos, capas)
+		pos += lado_basto * lado_basto * 2 * capas
 	var bastos := FileAccess.get_file_as_bytes(carpeta + "/basto.bin")
 	_mutex.lock()
 	_indice = indice
@@ -91,10 +99,7 @@ func leer(c: Vector2i) -> PackedFloat32Array:
 		return r
 	var crudo := FileAccess.get_file_as_bytes("%s/c_%d_%d.alt" % [carpeta, c.x, c.y])
 	var datos := crudo.decompress_dynamic(-1, FileAccess.COMPRESSION_GZIP)
-	var n := datos.size() / 2
-	r.resize(n)
-	for k in n:
-		r[k] = datos.decode_half(k * 2)
+	r = _componer(datos, 0, lado * lado, (_indice[c] as Vector2i).y)
 	_mutex.lock()
 	_cache[c] = r
 	_orden_cache.append(c)
@@ -109,11 +114,31 @@ func leer_basto(c: Vector2i) -> PackedFloat32Array:
 	var r := PackedFloat32Array()
 	if not tiene(c):
 		return r
-	var n := lado_basto * lado_basto
-	var base := int(_indice[c]) * n * 2
+	var e: Vector2i = _indice[c]
+	return _componer(_bastos, e.x, lado_basto * lado_basto, e.y)
+
+
+## Cambia la escala vertical y olvida las celdas ya leídas con la anterior. Lo ya construido en el
+## mundo (mallas, colisión) no cambia hasta que la celda se vuelva a cargar.
+func poner_escala_vertical(e: float) -> void:
+	_mutex.lock()
+	escala_vertical = e
+	_cache.clear()
+	_orden_cache.clear()
+	_mutex.unlock()
+
+
+## `n` alturas desde el byte `desde`: con una capa, tal cual; con dos, base + escala · relieve.
+func _componer(datos: PackedByteArray, desde: int, n: int, capas: int) -> PackedFloat32Array:
+	var r := PackedFloat32Array()
 	r.resize(n)
+	if capas < 2:
+		for k in n:
+			r[k] = datos.decode_half(desde + k * 2)
+		return r
+	var otra := desde + n * 2
 	for k in n:
-		r[k] = _bastos.decode_half(base + k * 2)
+		r[k] = datos.decode_half(desde + k * 2) + escala_vertical * datos.decode_half(otra + k * 2)
 	return r
 
 

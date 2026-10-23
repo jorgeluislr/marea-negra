@@ -33,10 +33,11 @@ extends Resource
 @export_range(0.05, 0.2) var rosa_alto := 0.16
 ## Cuántos metros de mundo cubre una baldosa de papel.
 @export var papel_metros := 1500.0
-## Escala al abrir y sus límites, en metros por píxel de pantalla.
-@export var metros_por_pixel := 6.0
-@export var metros_por_pixel_min := 0.75
-@export var metros_por_pixel_max := 100.0
+## Escala al abrir y sus límites, en metros por píxel de pantalla. Multiplicados por 25/12 al pasar
+## el mapa de 1/25 a 1/12 (23-10-2026): la carta abre enseñando la misma porción de Caribe real.
+@export var metros_por_pixel := 12.5
+@export var metros_por_pixel_min := 1.5
+@export var metros_por_pixel_max := 210.0
 ## Cuánto cambia la escala cada paso de rueda.
 @export var paso_zoom := 1.25
 

@@ -19,4 +19,4 @@ rect_interior = Rect2(105, 107, 727, 727)
 papel = ExtResource("3")
 rosa = ExtResource("4")
 costas = ExtResource("5")
-papel_metros = 4000.0
+papel_metros = 8000.0

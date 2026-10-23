@@ -4,15 +4,16 @@ extends Resource
 ## La "base de datos" de islas: la lista de `Isla` del mundo y la rejilla de celdas con que se
 ## buscan. Un recurso binario en disco (`assets/islas/archipielago.res`), sin nada más.
 ##
-## **El mundo es el Caribe entero a escala 1/25** (decidido con el usuario el 17-10-2026): 122 × 82 km
-## de juego, con las costas de OpenStreetMap (`blender_src/costas_caribe.py` las extrae y
+## **El mundo es el Caribe entero a escala 1/12** (1/25 el 17-10-2026; 1/12 desde el 23-10-2026,
+## para que quepan puertos a escala real): 255 × 172 km de juego, con las costas de OpenStreetMap
+## (`blender_src/costas_caribe.py` las extrae y
 ## `tools/hornear_islas.tscn` las convierte en este recurso). Escala UNIFORME en planta: con una
 ## escala para las distancias y otra para las islas, las islas de un mismo grupo —las Vírgenes están
 ## a 5-10 km reales unas de otras— se pisarían. Las distancias se acortan con la navegación rápida,
 ## no encogiendo el mar.
 ##
-## La altura va aparte (`escala_altura`), porque a 1/25 un cerro de 130 m se quedaría en 5 m. A 1/8
-## Norman Island, de 155 m de largo, sube a 16 m: una isla, no una aguja.
+## La altura NO se decide aquí: la pone `Relieve.escala_vertical` al cargar, sobre las alturas reales
+## de Copernicus. `escala_altura` es la del relieve sintético antiguo y ya no la lee nadie.
 ##
 ## El origen del mundo sigue en el Drake Channel, donde arranca el juego, hasta que haya origen
 ## flotante: el Caribe mide más de lo que aguanta la precisión simple lejos del origen.
@@ -27,7 +28,7 @@ extends Resource
 ## Es el centro del Sir Francis Drake Channel, entre Tortola y Norman Island.
 @export var origen_real := Vector2(18.385, -64.62)
 ## Metros de mundo por metro real, en planta.
-@export var escala := 1.0 / 25.0
+@export var escala := 1.0 / 12.0
 ## Metros de mundo por metro real, en altura. Ver la nota de arriba.
 @export var escala_altura := 1.0 / 8.0
 ## De dónde salen las costas, para citarlo (ODbL).

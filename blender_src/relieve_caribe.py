@@ -18,9 +18,17 @@ costa del relieve es la de la carta por construcción. La distancia es EXACTA a 
 cercanos —sacados de una rejilla de cubos— en vez de propagada por un raster: la versión con chaflán
 iterado tardaba 2 min por 16 km², y el Caribe tiene 2.087 celdas con tierra.
 
-La cota de cada isla con nombre es la de su pico real a la escala de altura (1/8); las demás, una
-estimación por su área. El cerro sube con `1 − e^(−d/L)` y L escala con la isla: con una L fija un
-islote salía plano y Cuba, una aguja.
+**Alturas REALES** (22-10-2026): la tierra sale de Copernicus GLO-90 y el fondo de ETOPO 2022
+(`fuentes/crudo/dem/`, ver su FUENTES.md), leídos con `tifffile` desde `fuentes/pylib`. Cada celda
+guarda DOS capas: la BASE en metros de juego (la playa y el fondo, que no se escalan: el calado del
+barco es real) y el RELIEVE en metros REALES, fundido a cero junto a la costa. El juego compone
+`base + escala_vertical · relieve` al cargar (`Relieve`), así que la escala vertical se cambia sin
+regenerar. La costa sigue siendo la de OSM: el mapa de alturas solo da la forma de dentro.
+
+Donde no hay mapa de alturas descargado queda el cerro sintético de antes —la cota de su pico real
+(o una por su área) con `1 − e^(−d/L)`, L según la isla—, guardado también como relieve real.
+
+    $PY blender_src/relieve_caribe.py zona 17.6,18.6,-78.5,-76.1     # las celdas de esa caja lat/lon
 """
 import gzip
 import json
@@ -34,6 +42,9 @@ import numpy as np
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COSTAS = os.path.join(RAIZ, "fuentes/derivados/costas_caribe.json")
 SALIDA = os.path.join(RAIZ, "assets/islas/relieve")
+DEM = os.path.join(RAIZ, "fuentes/crudo/dem")
+sys.path.append(os.path.join(RAIZ, "fuentes/pylib"))   # tifffile + imagecodecs, fuera de git
+M_POR_GRADO = 111320.0
 
 CELDA = 1000.0
 PASO = 4.0                      # m entre alturas
@@ -48,7 +59,8 @@ COTA_PLAYA = 1.2
 PLATAFORMA = 20.0
 PEND_PLATAFORMA = 0.05
 PEND_TALUD = 0.22
-FONDO = -25.0
+FONDO = -40.0                   # tope de profundidad: más hondo nadie lo ve ni vara
+ORILLA = 12.0                   # m de juego tierra adentro en que el relieve real llega entero
 
 # Pico más alto de cada isla con nombre, en metros REALES.
 PICOS = {
@@ -105,20 +117,37 @@ def preparar(polis, nombres):
     return a, b, cubos, np.array(cotas), np.array(eles)
 
 
-def _distancia(px, pz, a, b):
-    """Distancia mínima de cada punto a los tramos (a, b), por trozos para no reventar memoria."""
-    d = np.full(px.shape, np.inf)
+def _distancia(px, pz, a, b, paso=2.0, vecinos=6):
+    """Distancia mínima de cada punto a los tramos (a, b).
+
+    Por KD-tree: los tramos se muestrean cada `paso` metros, se busca a cada punto sus `vecinos`
+    muestras más cercanas y se mide la distancia EXACTA a los tramos de esas muestras. Antes era
+    fuerza bruta (cada punto contra cada tramo cercano): la celda tardaba 0,6 s de media y 7,9 en
+    las costas recortadas; así, 0,12 y 1,2 (22-10-2026, mismas 80 celdas).
+
+    Con 3 vecinos el tramo más cercano a veces NO estaba entre los candidatos —en un rincón, las
+    tres muestras más próximas pueden ser de otro tramo— y salía 2 mm de más a 12 m de la costa
+    (3 cm de altura). Con 6, idéntica a la fuerza bruta en las 41 celdas de Jamaica y Vírgenes.
+    """
+    from scipy.spatial import cKDTree
     ab = b - a
-    largo2 = np.maximum((ab ** 2).sum(1), 1e-12)
-    for i in range(0, len(a), 256):
-        sa, sab, sl = a[i:i + 256], ab[i:i + 256], largo2[i:i + 256]
-        rx = px[:, None] - sa[None, :, 0]
-        rz = pz[:, None] - sa[None, :, 1]
-        t = np.clip((rx * sab[None, :, 0] + rz * sab[None, :, 1]) / sl[None, :], 0.0, 1.0)
-        dx = rx - t * sab[None, :, 0]
-        dz = rz - t * sab[None, :, 1]
-        d = np.minimum(d, np.sqrt(dx * dx + dz * dz).min(axis=1))
-    return d
+    largo = np.sqrt((ab ** 2).sum(1))
+    n = np.maximum(np.ceil(largo / paso).astype(np.int64), 1)
+    tramo = np.repeat(np.arange(len(a)), n)
+    inicio = np.repeat(np.cumsum(n) - n, n)
+    t = (np.arange(len(tramo)) - inicio) / n[tramo]
+    muestras = a[tramo] + ab[tramo] * t[:, None]
+    k = min(vecinos, len(muestras))
+    _, ix = cKDTree(muestras).query(np.stack([px, pz], axis=1), k=k)
+    cand = tramo[ix.reshape(len(px), k)]                      # N × k tramos candidatos
+    sa, sab = a[cand], ab[cand]
+    rx = px[:, None] - sa[..., 0]
+    rz = pz[:, None] - sa[..., 1]
+    largo2 = np.maximum((sab ** 2).sum(-1), 1e-12)
+    u = np.clip((rx * sab[..., 0] + rz * sab[..., 1]) / largo2, 0.0, 1.0)
+    dx = rx - u * sab[..., 0]
+    dz = rz - u * sab[..., 1]
+    return np.sqrt(dx * dx + dz * dz).min(axis=1)
 
 
 def _dueno(polis, x0, z0):
@@ -166,7 +195,79 @@ def _ruido(px, pz):
     return total / norma
 
 
-def alturas_celda(cx, cz, polis, a, b, cubos, cotas, eles):
+class Mosaico:
+    """Teselas GeoTIFF en lat/lon, cargadas a demanda; `muestrear` da metros reales (NaN sin tesela)."""
+
+    def __init__(self, carpeta, nombre, grado, tope):
+        import tifffile
+        self.tifffile = tifffile
+        self.carpeta, self.nombre, self.grado = carpeta, nombre, grado
+        # Cuántas teselas se guardan a la vez: con 18 procesos y sin tope cada uno acababa con todo
+        # el Caribe en memoria (~1,6 GB por proceso). Se suelta la usada hace más tiempo.
+        self.tope = tope
+        self.teselas = {}
+
+    def _tesela(self, clave):
+        if clave in self.teselas:
+            self.teselas[clave] = self.teselas.pop(clave)   # al final: la más reciente
+        else:
+            while len(self.teselas) >= self.tope:
+                self.teselas.pop(next(iter(self.teselas)))
+            ruta = os.path.join(self.carpeta, self.nombre(*clave))
+            if os.path.exists(ruta):
+                with self.tifffile.TiffFile(ruta) as t:
+                    g = t.geotiff_metadata
+                    datos = t.pages[0].asarray().astype(np.float32)
+                tp, ps = g["ModelTiepoint"], g["ModelPixelScale"]
+                self.teselas[clave] = (datos, tp[3], tp[4], ps[0], ps[1])
+            else:
+                self.teselas[clave] = None
+        return self.teselas[clave]
+
+    def muestrear(self, lat, lon):
+        r = np.full(lat.shape, np.nan, dtype=np.float32)
+        # La esquina SUROESTE de la tesela, en múltiplos de `grado`.
+        kl = np.floor(lat / self.grado).astype(int)
+        ko = np.floor(lon / self.grado).astype(int)
+        for a, b in set(zip(kl.ravel().tolist(), ko.ravel().tolist())):
+            t = self._tesela((a * self.grado, b * self.grado))
+            if t is None:
+                continue
+            datos, oeste, norte, dx, dy = t
+            m = (kl == a) & (ko == b)
+            fx = (lon[m] - oeste) / dx
+            fy = (norte - lat[m]) / dy
+            i0 = np.clip(np.floor(fx).astype(int), 0, datos.shape[1] - 2)
+            j0 = np.clip(np.floor(fy).astype(int), 0, datos.shape[0] - 2)
+            u = np.clip(fx - i0, 0, 1)
+            v = np.clip(fy - j0, 0, 1)
+            arr = datos[j0, i0] * (1 - u) + datos[j0, i0 + 1] * u
+            aba = datos[j0 + 1, i0] * (1 - u) + datos[j0 + 1, i0 + 1] * u
+            r[m] = arr * (1 - v) + aba * v
+        return r
+
+
+def _nombre_copernicus(lat, lon):
+    return "Copernicus_DSM_COG_30_%s%02d_00_%s%03d_00_DEM.tif" % (
+        "N" if lat >= 0 else "S", abs(lat), "W" if lon < 0 else "E", abs(lon))
+
+
+def _nombre_etopo(lat, lon):
+    # ETOPO nombra por la esquina NOROESTE: la tesela de 15-30 N, 75-60 W es N30W075.
+    n = lat + 15
+    return "ETOPO_2022_v1_15s_%s%02d%s%03d_surface.tif" % (
+        "N" if n >= 0 else "S", abs(n), "W" if lon < 0 else "E", abs(lon))
+
+
+def a_lat_lon(px, pz, origen, escala):
+    """Inversa de `Archipielago.de_lat_lon`: equirrectangular centrada en `origen`."""
+    lat = origen[0] + (-pz / escala) / M_POR_GRADO
+    lon = origen[1] + (px / escala) / (M_POR_GRADO * math.cos(math.radians(origen[0])))
+    return lat, lon
+
+
+def alturas_celda(cx, cz, polis, a, b, cubos, cotas, eles, dem=None):
+    """Las dos capas de la celda: base (m de juego) y relieve (m REALES), LADO × LADO cada una."""
     x0, z0 = cx * CELDA, cz * CELDA
     alc = int(math.ceil(ALCANCE_TIERRA / CELDA))
     idx = set()
@@ -179,18 +280,40 @@ def alturas_celda(cx, cz, polis, a, b, cubos, cotas, eles):
     d = _distancia(px, pz, a[idx], b[idx]).reshape(LADO, LADO) if len(idx) else np.full((LADO, LADO), np.inf)
     dueño = _dueno(polis, x0, z0)
     tierra = dueño >= 0
-    cota = np.where(tierra, cotas[np.maximum(dueño, 0)], 0.0)
-    ele = np.where(tierra, eles[np.maximum(dueño, 0)], 1.0)
     d_in = np.minimum(d, ALCANCE_TIERRA)
-    n = _ruido(px, pz).reshape(LADO, LADO)
     s = np.clip(d_in / PLAYA, 0, 1)
     playa = COTA_PLAYA * s * s * (3 - 2 * s)
-    cerro = np.maximum(cota - COTA_PLAYA, 0) * (1 - np.exp(-np.maximum(d_in - PLAYA, 0) / ele))
-    peso = np.clip((d_in - PLAYA) / (2 * PLAYA), 0, 1)
-    h_tierra = playa + np.maximum(cerro * (1 + 0.45 * n * peso), 0)
     h_agua = np.where(d < PLATAFORMA, -d * PEND_PLATAFORMA,
                       np.maximum(-PLATAFORMA * PEND_PLATAFORMA - (d - PLATAFORMA) * PEND_TALUD, FONDO))
-    return np.where(tierra, h_tierra, h_agua).astype(np.float32)
+
+    # El cerro sintético, en metros REALES (la cota de la lista lo es): lo que queda donde no hay mapa.
+    cota = np.where(tierra, cotas[np.maximum(dueño, 0)], 0.0) / ESCALA_ALTURA
+    ele = np.where(tierra, eles[np.maximum(dueño, 0)], 1.0)
+    n = _ruido(px, pz).reshape(LADO, LADO)
+    cerro = np.maximum(cota - COTA_PLAYA / ESCALA_ALTURA, 0) * (1 - np.exp(-np.maximum(d_in - PLAYA, 0) / ele))
+    peso = np.clip((d_in - PLAYA) / (2 * PLAYA), 0, 1)
+    real = np.maximum(cerro * (1 + 0.45 * n * peso), 0)
+
+    if dem is not None:
+        lat, lon = a_lat_lon(px, pz, dem["origen"], dem["escala"])
+        lat, lon = lat.reshape(LADO, LADO), lon.reshape(LADO, LADO)
+        tierra_real = dem["tierra"].muestrear(lat, lon)
+        fondo_real = dem["fondo"].muestrear(lat, lon)
+        # Tierra: el relieve real, fundido a cero en la orilla para que la costa siga siendo la de OSM
+        # (los dos mapas no coinciden al metro). Sin tesela de Copernicus queda el sintético.
+        f = np.clip((d_in - PLAYA) / ORILLA, 0, 1)
+        f = f * f * (3 - 2 * f)
+        real = np.where(np.isnan(tierra_real), real, np.maximum(np.nan_to_num(tierra_real), 0.0) * f)
+        # Fondo: la profundidad REAL en metros de juego (el calado es real), con su tope, fundida desde
+        # la rampa de la orilla —que es la que casa con la costa— y nunca más somera que ella. La
+        # rampa también lleva el tope: sin él seguía bajando lejos de la costa (−72 m el 23-10-2026).
+        hondo = np.clip(np.nan_to_num(fondo_real, nan=FONDO), FONDO, -0.5)
+        g = np.clip(d / (3 * PLATAFORMA), 0, 1)
+        rampa = np.maximum(-np.minimum(d, 1e4) * PEND_PLATAFORMA, FONDO)
+        h_agua = np.where(np.isnan(fondo_real), h_agua, np.minimum(h_agua * (1 - g) + hondo * g, rampa))
+    base = np.where(tierra, playa, h_agua).astype(np.float32)
+    real = np.where(tierra, real, 0.0).astype(np.float32)
+    return base, real
 
 
 _G = {}
@@ -199,16 +322,25 @@ _G = {}
 def _iniciar():
     d, polis, nombres = cargar()
     a, b, cubos, cotas, eles = preparar(polis, nombres)
-    _G.update(polis=polis, a=a, b=b, cubos=cubos, cotas=cotas, eles=eles)
+    dem = {"origen": d["origen"], "escala": d["escala"],
+           "tierra": Mosaico(os.path.join(DEM, "copernicus_glo90"), _nombre_copernicus, 1, 12),   # 6 MB
+           "fondo": Mosaico(os.path.join(DEM, "etopo2022"), _nombre_etopo, 15, 3)}                # 52 MB
+    _G.update(polis=polis, a=a, b=b, cubos=cubos, cotas=cotas, eles=eles, dem=dem)
 
 
 def _trabajar(c):
     cx, cz = c
-    h = alturas_celda(cx, cz, _G["polis"], _G["a"], _G["b"], _G["cubos"], _G["cotas"], _G["eles"])
+    base, real = alturas_celda(cx, cz, _G["polis"], _G["a"], _G["b"], _G["cubos"], _G["cotas"],
+                               _G["eles"], _G["dem"])
+    # Las dos capas seguidas, base y relieve: `Relieve` lo sabe por "capas" en el índice.
     with gzip.open(os.path.join(SALIDA, "c_%d_%d.alt" % (cx, cz)), "wb", compresslevel=6) as f:
-        f.write(h.astype(np.float16).tobytes())
-    basto = h[::BASTO, ::BASTO]
-    return cx, cz, float(h.min()), float(h.max()), basto.astype(np.float16).tobytes()
+        f.write(base.astype(np.float16).tobytes())
+        f.write(real.astype(np.float16).tobytes())
+    basto = (base[::BASTO, ::BASTO].astype(np.float16).tobytes()
+             + real[::BASTO, ::BASTO].astype(np.float16).tobytes())
+    # Para descartar las celdas que son solo fondo vale cualquier escala: la tierra está sobre cero.
+    h = base + real * ESCALA_ALTURA
+    return cx, cz, float(h.min()), float(h.max()), basto
 
 
 def celdas_necesarias(d, polis):
@@ -230,7 +362,15 @@ def celdas_necesarias(d, polis):
 def main():
     d, polis, nombres = cargar()
     os.makedirs(SALIDA, exist_ok=True)
-    if len(sys.argv) > 2:
+    parcial = len(sys.argv) > 2
+    if parcial and sys.argv[1] == "zona":
+        la0, la1, lo0, lo1 = (float(v) for v in sys.argv[2].split(","))
+        o, e = d["origen"], d["escala"]
+        xs = sorted((lo - o[1]) * M_POR_GRADO * math.cos(math.radians(o[0])) * e for lo in (lo0, lo1))
+        zs = sorted(-(la - o[0]) * M_POR_GRADO * e for la in (la0, la1))
+        lista = [c for c in celdas_necesarias(d, polis)
+                 if xs[0] <= (c[0] + 0.5) * CELDA <= xs[1] and zs[0] <= (c[1] + 0.5) * CELDA <= zs[1]]
+    elif parcial:
         lista = [tuple(int(v) for v in s.split(",")) for s in sys.argv[2:]]
     else:
         lista = celdas_necesarias(d, polis)
@@ -245,19 +385,28 @@ def main():
     utiles = {}
     for cx, cz, lo, hi, basto in resultado:
         if hi > -3.0:
-            utiles[(cx, cz)] = ({"c": [cx, cz], "min": round(lo, 2), "max": round(hi, 2)}, basto)
+            utiles[(cx, cz)] = ({"c": [cx, cz], "min": round(lo, 2), "max": round(hi, 2), "capas": 2},
+                                basto)
         else:
             os.remove(os.path.join(SALIDA, "c_%d_%d.alt" % (cx, cz)))
     ruta = os.path.join(SALIDA, "indice.json")
     bastos = os.path.join(SALIDA, "basto.bin")
     todas = {}
-    if len(sys.argv) > 2 and os.path.exists(ruta):
-        # Regenerar unas pocas celdas conserva las demás.
+    if parcial and os.path.exists(ruta):
+        # Regenerar unas pocas celdas conserva las demás, con las capas que tengan (sin "capas", 1:
+        # las de antes de las alturas reales, con la escala vertical ya aplicada).
         viejo = json.load(open(ruta))["celdas"]
         crudo = open(bastos, "rb").read()
         n = (LADO - 1) // BASTO + 1
-        for i, e in enumerate(viejo):
-            todas[tuple(e["c"])] = (e, crudo[i * n * n * 2:(i + 1) * n * n * 2])
+        pos = 0
+        for e in viejo:
+            largo = n * n * 2 * e.get("capas", 1)
+            todas[tuple(e["c"])] = (e, crudo[pos:pos + largo])
+            pos += largo
+    # Las regeneradas que ahora son solo fondo se van también del índice: su fichero ya no existe.
+    for c in lista:
+        if tuple(c) not in utiles:
+            todas.pop(tuple(c), None)
     todas.update(utiles)
     orden = sorted(todas)
     json.dump({"celda": CELDA, "paso": PASO, "lado": LADO, "basto": BASTO,

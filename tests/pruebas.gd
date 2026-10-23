@@ -43,7 +43,7 @@ func _correr() -> void:
 		await IaTest.correr(m, arbol)
 	if m.quiere_paquete("mundo", false):
 		await MundoTest.correr(m, arbol)
-	if m.quiere_paquete("mapa", false):
+	if m.quiere_paquete("mapa"):
 		await MapaTest.correr(m, arbol)
 	if m.quiere_paquete("clima"):
 		await ClimaTest.correr(m, arbol)

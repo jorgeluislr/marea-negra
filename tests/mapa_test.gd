@@ -16,10 +16,16 @@ static func correr(m: MarcoPruebas, arbol: SceneTree) -> void:
 	if not m.comprobar(arch != null and not arch.islas.is_empty(),
 			"el archipiélago está en disco y tiene islas"):
 		return
-	_datos(m, arch)
-	await _relieve(m, arbol, arch)
-	await _carta(m, arbol, arch)
-	await _flechas(m, arbol)
+	if m.escenario("datos"):
+		_datos(m, arch)
+	if m.escenario("relieve"):
+		await _relieve(m, arbol, arch)
+	if m.escenario("relieve_real"):
+		await _relieve_real(m, arbol, arch)
+	if m.escenario("carta"):
+		await _carta(m, arbol, arch)
+	if m.escenario("flechas"):
+		await _flechas(m, arbol)
 
 
 ## Lo que se guarda de cada isla y lo que se puede preguntar sin cargarla.
@@ -43,13 +49,16 @@ static func _datos(m: MarcoPruebas, arch: Archipielago) -> void:
 	m.comprobar(sin_costa.is_empty(), "todas tienen línea de costa", "%d sin ella" % sin_costa.size())
 	m.comprobar(sin_celda.is_empty(), "todas están en la celda de su posición", "%d no" % sin_celda.size())
 
-	# La escala, contra la geografía de verdad: Jamaica mide 235 km de este a oeste, que a 1/25 son
-	# 9,4 km, y Norman Island está en 18,317 N 64,617 W. Si la proyección o la escala estuvieran mal,
+	# La escala, contra la geografía de verdad: Jamaica mide 235 km de este a oeste, que a 1/12 son
+	# 19,6 km, y Norman Island está en 18,317 N 64,617 W. Si la proyección o la escala estuvieran mal,
 	# esto es lo que se movería.
 	var jam := _isla(arch, "Jamaica")
 	if m.comprobar(jam != null, "Jamaica está en el archipiélago"):
 		var r := jam.limites()
-		m.casi(r.size.x / 1000.0, 9.2, 0.6, "Jamaica mide lo que mide a 1/25 (km de este a oeste)")
+		m.casi(r.size.x / 1000.0, 235.0 * arch.escala, 1.3,
+			"Jamaica mide lo que mide a la escala del mapa (km de este a oeste)")
+		# 1/12 desde el 23-10-2026 (era 1/25): las islas tienen sitio para puertos a escala real.
+		m.casi(arch.escala, 1.0 / 12.0, 1e-6, "el mapa está a 1/12 en planta")
 		m.menor_que(r.get_center().distance_to(arch.de_lat_lon(18.12, -77.3)), 1500.0,
 			"y está donde dicen sus coordenadas (m)")
 	var nor := _isla(arch, "Norman Island")
@@ -175,6 +184,65 @@ static func _relieve(m: MarcoPruebas, arbol: SceneTree, arch: Archipielago) -> v
 	g.set("foco", null)
 	foco.queue_free()
 	await arbol.process_frame
+
+
+## El relieve sale de los mapas de altura REALES (Copernicus GLO-90 en tierra, ETOPO 2022 en el
+## fondo), no de un cerro por distancia a la costa. Antes de eso Jamaica era una meseta: todo lo que
+## estaba a más de ~1 km de la orilla quedaba a la cota de su pico.
+##
+## Y la escala vertical se elige AL CARGAR (`Relieve.escala_vertical`): los ficheros guardan metros
+## reales, así que probar 1/25 o 1/8 no obliga a regenerar el Caribe.
+static func _relieve_real(m: MarcoPruebas, arbol: SceneTree, arch: Archipielago) -> void:
+	var g := arbol.get_first_node_in_group("tierra")
+	if not m.comprobar(g != null and g.get("relieve") != null, "hay relieve en el mundo"):
+		return
+	var rel: Object = g.get("relieve")
+	var t := 0.0
+	while t < 10.0 and not bool(rel.call("listo")):
+		await arbol.process_frame
+		t += arbol.root.get_process_delta_time()
+	var escala0 := float(rel.get("escala_vertical")) if rel.get("escala_vertical") != null else 0.125
+	# Blue Mountain Peak, 2.256 m, el techo de Jamaica: lo más alto a 200 m de juego (5 km reales).
+	var cima := func(lat: float, lon: float) -> float:
+		var c := arch.de_lat_lon(lat, lon)
+		var h := -INF
+		for dz in range(-200, 201, 8):
+			for dx in range(-200, 201, 8):
+				h = maxf(h, float(rel.call("altura_en", c + Vector2(dx, dz))))
+		return h
+	var pico: float = cima.call(18.0464, -76.5793)
+	m.casi(pico, 2256.0 * escala0, 2256.0 * escala0 * 0.2,
+		"Blue Mountain Peak tiene la altura real a la escala vertical (m)", "1/%.0f" % (1.0 / escala0))
+	# Spanish Town, en la llanura del sur a 20 m reales y 10 km de la costa: con el cerro sintético
+	# estaba a más de 200 m de juego.
+	var llano := float(rel.call("altura_en", arch.de_lat_lon(17.99, -76.955)))
+	m.menor_que(llano, 0.1 * pico, "la llanura de Spanish Town es llana, no una meseta (m)")
+	# El fondo es el real: a 6 km REALES de la costa norte, frente a Ocho Ríos, el talud ya pasa de
+	# 300 m y queda en el tope de profundidad; el sintético daba −25. La distancia va en km reales:
+	# escrita en metros de juego (250 m) dejó de ser 6 km al pasar el mapa a 1/12, y caía en el
+	# arrecife de −15 m que hay hasta los 3 km.
+	var p := arch.de_lat_lon(18.30, -77.10)
+	while float(rel.call("altura_en", p)) > 0.0 and p.y > -1e6:
+		p.y -= 4.0
+	m.menor_que(float(rel.call("altura_en", p + Vector2(0, -6000.0 * arch.escala))), -30.0,
+		"frente a Ocho Ríos el fondo es el real y hondo (m)")
+	# Y nunca más hondo que el tope en NINGUNA celda (el índice guarda el mínimo de cada una). El
+	# 23-10-2026 la rampa de la orilla seguía bajando lejos de la costa: 444 celdas, hasta −72 m.
+	var indice = JSON.parse_string(FileAccess.get_file_as_string(str(rel.get("carpeta")) + "/indice.json"))
+	var hondas := 0
+	var peor := 0.0
+	for e in indice["celdas"]:
+		if float(e["min"]) < float(rel.get("fondo")) - 0.5:
+			hondas += 1
+			peor = minf(peor, float(e["min"]))
+	m.comprobar(hondas == 0, "ninguna celda pasa del tope de profundidad",
+		"%d celdas, la peor a %.1f m" % [hondas, peor])
+	# Cambiar la escala al cargar cambia la altura sin regenerar nada.
+	if m.comprobar(rel.has_method("poner_escala_vertical"), "la escala vertical se cambia al cargar"):
+		rel.call("poner_escala_vertical", 1.0 / 25.0)
+		var pico25: float = cima.call(18.0464, -76.5793)
+		rel.call("poner_escala_vertical", escala0)
+		m.casi(pico25, 2256.0 / 25.0, 2256.0 / 25.0 * 0.2, "a 1/25 el pico mide lo suyo (m)")
 
 
 ## La carta: se abre con M, centrada en el barco; se arrastra con el ratón y se acerca con la

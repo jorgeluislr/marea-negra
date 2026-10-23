@@ -66,9 +66,9 @@ mesh = SubResource("PlaneMesh_water")
 script = ExtResource("4")
 barco_path = NodePath("../Ship")
 
-; Salida en mar abierto, 1,5 km al sur de Norman Island. En el origen del mundo (el Drake Channel)
-; la costa de Tortola quedaba a 100 m: a escala 1/25 el canal mide unos 300 m y las pruebas de
-; navegación acababan contra tierra (`ia` / "ciñendo, gana terreno a barlovento": 30 m → 3-11).
+; Salida en mar abierto, 1,5 km al sur del origen (el Drake Channel): a 1/12 eso es ~870 m al sur
+; de Norman Island. En el origen mismo la costa de Tortola quedaba a 100 m cuando el mapa era 1/25
+; y las pruebas de navegación acababan contra tierra (`ia` / "ciñendo, gana terreno": 30 m → 3-11).
 [node name="GestorBarcos" type="Node3D" parent="." unique_id=1258553189]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1500)
 script = ExtResource("8")
